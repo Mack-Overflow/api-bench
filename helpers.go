@@ -57,3 +57,17 @@ func sortedKeys(m map[string]string) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+func normalizeJSON(b []byte) []byte {
+	if len(b) == 0 {
+		return []byte(`{}`)
+	}
+	return b
+}
+
+func toValidJSON(data []byte) string {
+	if len(data) == 0 {
+		return "{}"
+	}
+	return string(data)
+}

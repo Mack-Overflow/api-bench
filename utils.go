@@ -3,11 +3,31 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"html"
+	"os"
 	"regexp"
 	"strings"
+	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
+
+func openDB() (*sql.DB, error) {
+	dsn := os.Getenv("DB_URL")
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(time.Hour)
+
+	return db, db.Ping()
+}
 
 func (r StartBenchmarkRequest) String() string {
 	var b strings.Builder
@@ -19,22 +39,26 @@ func (r StartBenchmarkRequest) String() string {
 	b.WriteString(fmt.Sprintf("  DurationSec: %d\n", r.DurationSec))
 
 	if len(r.Headers) > 0 {
-		b.WriteString("  Headers:\n")
-		keys := sortedKeys(r.Headers)
-		for _, k := range keys {
-			b.WriteString(fmt.Sprintf("    %s: %s\n", k, redactHeader(k, r.Headers[k])))
+		var headers map[string]string
+		if err := json.Unmarshal(r.Headers, &headers); err == nil {
+			b.WriteString("  Headers:\n")
+			for k, v := range headers {
+				b.WriteString(fmt.Sprintf("    %s: %s\n", k, redactHeader(k, v)))
+			}
 		}
 	}
 
 	if len(r.Params) > 0 {
-		b.WriteString("  Params:\n")
-		keys := sortedKeys(r.Params)
-		for _, k := range keys {
-			b.WriteString(fmt.Sprintf("    %s=%s\n", k, r.Params[k]))
+		var params map[string]string
+		if err := json.Unmarshal(r.Params, &params); err == nil {
+			b.WriteString("  Params:\n")
+			for k, v := range params {
+				b.WriteString(fmt.Sprintf("    %s=%s\n", k, v))
+			}
 		}
 	}
 
-	if r.Body != nil {
+	if len(r.Body) > 0 {
 		b.WriteString("  Body: ")
 		b.WriteString(bodySummary(r.Body))
 		b.WriteString("\n")

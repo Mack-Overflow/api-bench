@@ -228,28 +228,37 @@ func setupWorker(req StartBenchmarkRequest) (*workerContext, error) {
 		return nil, err
 	}
 
-	var bodyBytes []byte
-	if req.Body != nil {
-		bodyBytes, err = json.Marshal(req.Body)
-		if err != nil {
-			return nil, err
-		}
-	}
+	// req.Body is already []byte (json.RawMessage), no need to marshal
+	bodyBytes := []byte(req.Body)
 
 	httpReq, err := http.NewRequest(req.Method, parsedURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
 
-	for k, v := range req.Headers {
-		httpReq.Header.Set(k, v)
+	// Unmarshal headers from JSON
+	if len(req.Headers) > 0 {
+		var headers map[string]string
+		if err := json.Unmarshal(req.Headers, &headers); err != nil {
+			return nil, fmt.Errorf("invalid headers JSON: %w", err)
+		}
+		for k, v := range headers {
+			httpReq.Header.Set(k, v)
+		}
 	}
 
-	q := httpReq.URL.Query()
-	for k, v := range req.Params {
-		q.Set(k, v)
+	// Unmarshal params from JSON
+	if len(req.Params) > 0 {
+		var params map[string]string
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, fmt.Errorf("invalid params JSON: %w", err)
+		}
+		q := httpReq.URL.Query()
+		for k, v := range params {
+			q.Set(k, v)
+		}
+		httpReq.URL.RawQuery = q.Encode()
 	}
-	httpReq.URL.RawQuery = q.Encode()
 
 	client := &http.Client{
 		Timeout: 15 * time.Second,
