@@ -12,6 +12,18 @@ import (
 	"github.com/Mack-Overflow/api-bench/db"
 )
 
+type BenchmarkStatusResponse struct {
+	ID         string          `json:"id"`
+	Status     BenchmarkStatus `json:"status"`
+	StartedAt  time.Time       `json:"started_at"`
+	EndedAt    *time.Time      `json:"ended_at,omitempty"`
+	Requests   int64           `json:"requests"`
+	Errors     int64           `json:"errors"`
+	P50Ms      int64           `json:"p50_ms"`
+	P95Ms      int64           `json:"p95_ms"`
+	StopReason StopReason      `json:"stop_reason,omitempty"`
+}
+
 func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -148,6 +160,11 @@ func runBenchmarkAsync(store *db.DB, run *BenchmarkRun) {
 
 	var wg sync.WaitGroup
 
+	if run.Request.CacheMode == CacheWarm {
+		log.Printf("warming cache for %s", run.ID)
+		warmCache(run.Request)
+	}
+
 	limiter := newRateLimiter(run.Request.RateLimit)
 	for i := 0; i < run.Request.Concurrency; i++ {
 		wg.Add(1)
@@ -210,6 +227,18 @@ func runBenchmarkAsync(store *db.DB, run *BenchmarkRun) {
 	runsMu.Lock()
 	run.Status = StatusCompleted
 	run.EndedAt = &end
+
+	// Set cache metrics
+	result.Cache.Hits = metrics.CacheHits
+	result.Cache.Misses = metrics.CacheMisses
+
+	if len(metrics.HitLat) > 0 {
+		result.Cache.HitP95Ms = percentile(metrics.HitLat, 95).Milliseconds()
+	}
+	if len(metrics.MissLat) > 0 {
+		result.Cache.MissP95Ms = percentile(metrics.MissLat, 95).Milliseconds()
+	}
+
 	run.Result = result
 	runsMu.Unlock()
 
@@ -262,4 +291,16 @@ func getBenchmarkStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(run)
+	// resp := BenchmarkStatusResponse{
+	// 	ID:         run.ID,
+	// 	Status:     run.Status,
+	// 	StartedAt:  run.StartedAt,
+	// 	EndedAt:    run.EndedAt,
+	// 	Requests:   atomic.LoadInt64(&metrics.SuccessTotal),
+	// 	Errors:     atomic.LoadInt64(&metrics.ErrorsTotal),
+	// 	P50Ms:      percentile(latencies, 50).Milliseconds(),
+	// 	P95Ms:      percentile(latencies, 95).Milliseconds(),
+	// 	StopReason: run.StopReason,
+	// }
+	// json.NewEncoder(w).Encode(resp)
 }

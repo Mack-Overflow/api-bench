@@ -18,9 +18,10 @@ import (
 )
 
 type Result struct {
-	Latency time.Duration
-	Error   bool
-	Status  int
+	Latency  time.Duration
+	Error    bool
+	Status   int
+	CacheHit *bool
 }
 
 type workerContext struct {
@@ -212,7 +213,9 @@ func benchmarkWorker(
 
 		newTotal := atomic.AddInt64(&metrics.SuccessTotal, 1)
 
-		metrics.record(latency, nil)
+		cacheHit := detectCacheHit(resp.Header)
+		// metrics.record(latency, nil)
+		metrics.recordWithCache(latency, nil, cacheHit)
 		errorTracker.RecordSuccess()
 
 		// stop benchmark exactly at limit
@@ -262,6 +265,14 @@ func setupWorker(req StartBenchmarkRequest) (*workerContext, error) {
 
 	client := &http.Client{
 		Timeout: 15 * time.Second,
+	}
+
+	switch req.CacheMode {
+	case CacheBypass:
+		httpReq.Header.Set("Cache-Control", "no-cache, no-store, max-age=0")
+		httpReq.Header.Set("Pragma", "no-cache")
+	case CacheWarm, CacheDefault:
+		// no-op
 	}
 
 	return &workerContext{

@@ -30,6 +30,12 @@ type BenchmarkMetrics struct {
 	ErrorsTotal   int   `json:"errors_total"`
 	Latencies     []time.Duration
 	AvgLatencyMs  float64 `json:"avg_latency_ms"`
+
+	HitLat  []time.Duration
+	MissLat []time.Duration
+
+	CacheHits   int
+	CacheMisses int
 }
 
 type MetricsSnapshot struct {
@@ -69,4 +75,31 @@ func (m *BenchmarkMetrics) record(latency time.Duration, err error) {
 	}
 
 	m.Latencies = append(m.Latencies, latency)
+}
+
+func (m *BenchmarkMetrics) recordWithCache(
+	lat time.Duration,
+	err error,
+	cacheHit *bool,
+) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.RequestsTotal++
+	if err != nil {
+		m.ErrorsTotal++
+		return
+	}
+
+	m.Latencies = append(m.Latencies, lat)
+
+	if cacheHit != nil {
+		if *cacheHit {
+			m.CacheHits++
+			m.HitLat = append(m.HitLat, lat)
+		} else {
+			m.CacheMisses++
+			m.MissLat = append(m.MissLat, lat)
+		}
+	}
 }

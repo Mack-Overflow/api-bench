@@ -37,9 +37,10 @@ type StartBenchmarkRequest struct {
 	Params  json.RawMessage `json:"params"`
 	Body    json.RawMessage `json:"body"`
 
-	Concurrency int `json:"concurrency"`
-	RateLimit   int `json:"rate_limit"`
-	DurationSec int `json:"duration_seconds"`
+	Concurrency int       `json:"concurrency"`
+	RateLimit   int       `json:"rate_limit"`
+	DurationSec int       `json:"duration_seconds"`
+	CacheMode   CacheMode `json:"cache_mode"`
 }
 
 type StopReason string
@@ -72,6 +73,13 @@ type BenchmarkResult struct {
 	AvgMs    float64 `json:"avg_ms"`
 	P50Ms    int64   `json:"p50_ms"`
 	P95Ms    int64   `json:"p95_ms"`
+
+	Cache struct {
+		Hits      int   `json:"hits"`
+		Misses    int   `json:"misses"`
+		HitP95Ms  int64 `json:"hit_p95_ms,omitempty"`
+		MissP95Ms int64 `json:"miss_p95_ms,omitempty"`
+	} `json:"cache"`
 }
 
 var (
