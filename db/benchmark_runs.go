@@ -14,8 +14,10 @@ type BenchmarkRunInsert struct {
 func (db *DB) InsertBenchmarkRunTx(
 	tx *sql.Tx,
 	input BenchmarkRunInsert,
-) error {
-	_, err := tx.Exec(`
+) (int64, error) {
+	var id int64
+
+	err := tx.QueryRow(`
 		INSERT INTO benchmark_runs (
 			endpoint_version_id,
 			concurrency,
@@ -24,16 +26,18 @@ func (db *DB) InsertBenchmarkRunTx(
 			status,
 			created_at
 		) VALUES ($1, $2, $3, $4, 'started', NOW())
+		RETURNING id
 	`,
 		input.EndpointVersionID,
 		input.Concurrency,
 		input.RateLimit,
 		input.DurationSeconds,
-	)
-	return err
+	).Scan(&id)
+
+	return id, err
 }
 
-func (db *DB) MarkBenchmarkRunRunning(runID string) error {
+func (db *DB) MarkBenchmarkRunRunning(runID int) error {
 	_, err := db.Exec(`
 		UPDATE benchmark_runs
 		SET status = 'running'
@@ -45,7 +49,7 @@ func (db *DB) MarkBenchmarkRunRunning(runID string) error {
 
 func (db *DB) FinalizeBenchmarkRun(
 	tx *sql.Tx,
-	runID string,
+	runID int,
 	status string,
 	stopReason string,
 ) error {

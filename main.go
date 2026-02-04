@@ -52,7 +52,7 @@ const (
 )
 
 type BenchmarkRun struct {
-	ID        string
+	ID        int
 	Request   StartBenchmarkRequest
 	Status    BenchmarkStatus
 	StartedAt time.Time

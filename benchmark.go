@@ -54,14 +54,10 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 
 		var endpointVersionID *int64
 		var endpointID *int64
+		var benchmarkRunId int64
 
-		if err := store.WithTx(func(tx *sql.Tx) error {
+		benchmarkRunId, err := db.WithTx(store, func(tx *sql.Tx) (int64, error) {
 			// Check if endpoint should be created or if exists
-			name := req.Name
-			if name == "" {
-				name = ""
-			}
-
 			if req.EndpointID == nil {
 				id, err := InsertEndpointTx(
 					tx,
@@ -73,7 +69,7 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 					req.Body,
 				)
 				if err != nil {
-					return err
+					return 0, err
 				}
 				endpointID = &id
 			} else {
@@ -92,21 +88,21 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 					req.URL,
 				)
 				if err != nil {
-					return err
+					return 0, err
 				}
 				endpointVersionID = &vid
 			} else {
 				endpointVersionID = req.EndpointVersionID
 			}
 
-			log.Printf("here. %v", *endpointID)
 			return store.InsertBenchmarkRunTx(tx, db.BenchmarkRunInsert{
 				EndpointVersionID: endpointVersionID,
 				Concurrency:       req.Concurrency,
 				RateLimit:         req.RateLimit,
 				DurationSeconds:   req.DurationSec,
 			})
-		}); err != nil {
+		})
+		if err != nil {
 			log.Printf("insert benchmark run failed: %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -115,7 +111,7 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 		ctx, cancel := context.WithCancel(context.Background())
 
 		run := &BenchmarkRun{
-			ID:         runID,
+			ID:         int(benchmarkRunId),
 			Request:    req,
 			MaxSuccess: int64(req.Concurrency),
 			Status:     StatusPending,
@@ -200,25 +196,29 @@ func runBenchmarkAsync(store *db.DB, run *BenchmarkRun) {
 	}
 
 	// Finalize run
-	err := store.WithTx(func(tx *sql.Tx) error {
+	_, err := db.WithTx(store, func(tx *sql.Tx) (int64, error) {
 		if err := store.FinalizeBenchmarkRun(
 			tx,
 			run.ID,
 			"completed",
 			string(run.StopReason),
 		); err != nil {
-			return err
+			return 0, err
 		}
 
 		return store.InsertBenchmarkMetrics(tx, db.BenchmarkMetricsInsert{
-			RunID:    run.ID,
-			Requests: result.Requests,
-			Errors:   result.Errors,
-			AvgMs:    result.AvgMs,
-			P50Ms:    result.P50Ms,
-			P95Ms:    result.P95Ms,
+			BenchmarkRunID: run.ID,
+			Requests:       result.Requests,
+			Errors:         result.Errors,
+			AvgMs:          result.AvgMs,
+			P50Ms:          result.P50Ms,
+			P95Ms:          result.P95Ms,
 		})
 	})
+
+	if err != nil {
+		log.Printf("failed to persist benchmark result: %v", err)
+	}
 
 	if err != nil {
 		log.Printf("failed to persist benchmark result: %v", err)

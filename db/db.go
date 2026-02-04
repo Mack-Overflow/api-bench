@@ -13,19 +13,26 @@ func New(db *sql.DB) *DB {
 	return &DB{DB: db}
 }
 
-func (db *DB) WithTx(fn func(tx *sql.Tx) error) error {
+func WithTx[T any](db *DB, fn func(tx *sql.Tx) (T, error)) (T, error) {
+	var zero T
+
 	tx, err := db.Begin()
 	if err != nil {
-		return err
+		return zero, err
 	}
 
 	defer tx.Rollback()
 
-	if err := fn(tx); err != nil {
-		return err
+	val, err := fn(tx)
+	if err != nil {
+		return zero, err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return zero, err
+	}
+
+	return val, nil
 }
 
 func DefaultPool(db *sql.DB) {
