@@ -26,7 +26,7 @@ func (db *DB) InsertBenchmarkMetrics(
 			created_at
 		) VALUES ($1, $2, $3, $4, $5, $6, NOW())
 	`,
-		m.BenchmarkRunID, // ✅ DB ID
+		m.BenchmarkRunID,
 		m.Requests,
 		m.Errors,
 		m.AvgMs,
