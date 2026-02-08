@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -70,4 +72,28 @@ func toValidJSON(data []byte) string {
 		return "{}"
 	}
 	return string(data)
+}
+
+func parseRetryAfter(resp *http.Response) time.Duration {
+	retryAfter := resp.Header.Get("Retry-After")
+	if retryAfter == "" {
+		return 2 * time.Second
+	}
+
+	// Retry-After can be seconds or HTTP date
+	if secs, err := strconv.Atoi(retryAfter); err == nil {
+		if secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+		return 2 * time.Second
+	}
+
+	if t, err := http.ParseTime(retryAfter); err == nil {
+		d := time.Until(t)
+		if d > 0 {
+			return d
+		}
+	}
+
+	return 2 * time.Second
 }

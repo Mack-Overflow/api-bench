@@ -111,14 +111,14 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 		ctx, cancel := context.WithCancel(context.Background())
 
 		run := &BenchmarkRun{
-			ID:         int(benchmarkRunId),
-			Request:    req,
-			MaxSuccess: int64(req.Concurrency),
-			Status:     StatusPending,
-			StartedAt:  time.Now(),
-			ctx:        ctx,
-			cancel:     cancel,
-			Metrics:    &BenchmarkMetrics{},
+			ID:      int(benchmarkRunId),
+			Request: req,
+			// MaxSuccess: int64(req.Concurrency),
+			Status:    StatusPending,
+			StartedAt: time.Now(),
+			ctx:       ctx,
+			cancel:    cancel,
+			Metrics:   &BenchmarkMetrics{},
 		}
 
 		runsMu.Lock()
@@ -166,7 +166,7 @@ func runBenchmarkAsync(store *db.DB, run *BenchmarkRun) {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			benchmarkWorker(ctx, workerID, run.Request, run.Metrics, run.MaxSuccess, errorTracker, limiter)
+			benchmarkWorker(ctx, workerID, run.Request, run.Metrics, errorTracker, limiter)
 		}(i)
 	}
 

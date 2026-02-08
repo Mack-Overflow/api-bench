@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"sync"
 	"time"
 )
@@ -50,7 +51,12 @@ func (m *BenchmarkMetrics) Snapshot() MetricsSnapshot {
 	defer m.mu.Unlock()
 
 	latencies := append([]time.Duration(nil), m.Latencies...)
-
+	// log.Printf(
+	// 	"requests=%d errors=%d latencies=%d",
+	// 	m.RequestsTotal,
+	// 	m.ErrorsTotal,
+	// 	len(m.Latencies),
+	// )
 	snap := MetricsSnapshot{
 		Requests: m.RequestsTotal,
 		Errors:   m.ErrorsTotal,
@@ -67,6 +73,13 @@ func (m *BenchmarkMetrics) Snapshot() MetricsSnapshot {
 func (m *BenchmarkMetrics) record(latency time.Duration, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	log.Printf(
+		"RECORD: req=%d err=%v lat=%s",
+		m.RequestsTotal,
+		err != nil,
+		latency,
+	)
 
 	m.RequestsTotal++
 	if err != nil {

@@ -62,7 +62,6 @@ type BenchmarkRun struct {
 	cancel context.CancelFunc
 
 	Metrics    *BenchmarkMetrics
-	MaxSuccess int64
 	Result     *BenchmarkResult
 	StopReason StopReason `json:"stop_reason,omitempty"`
 }

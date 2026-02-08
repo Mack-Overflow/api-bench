@@ -10,8 +10,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -91,7 +89,6 @@ func benchmarkWorker(
 	workerID int,
 	req StartBenchmarkRequest,
 	metrics *BenchmarkMetrics,
-	maxSuccess int64,
 	errorTracker *ErrorTracker,
 	limiter <-chan time.Time,
 ) {
@@ -102,6 +99,7 @@ func benchmarkWorker(
 	}
 
 	for {
+		log.Printf("worker %d tick", workerID)
 		select {
 		case <-ctx.Done():
 			return
@@ -115,9 +113,6 @@ func benchmarkWorker(
 				return
 			}
 		}
-		if atomic.LoadInt64(&metrics.SuccessTotal) >= maxSuccess {
-			return
-		}
 
 		// clone request
 		reqCopy := wctx.req.Clone(ctx)
@@ -130,98 +125,60 @@ func benchmarkWorker(
 		resp, err := wctx.client.Do(reqCopy)
 		latency := time.Since(start)
 
+		var finalErr error
+
 		if err != nil {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 				return
 			}
-			if errors.Is(err, context.Canceled) {
-				return
-			}
-			metrics.record(latency, err)
+
 			log.Printf(err.Error())
 			errorTracker.RecordError()
+			metrics.record(latency, err)
 			continue
 		}
 
 		bodyBytes, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if readErr != nil {
-			log.Printf("failed to read response body: %v", readErr)
-		}
-		if resp.StatusCode >= 500 {
-			head := headLines(bodyBytes, 50, 128*1024)
 
+		if readErr != nil {
+			finalErr = readErr
+		}
+		switch {
+		case resp.StatusCode >= 500:
+			finalErr = fmt.Errorf("server error %d", resp.StatusCode)
+
+			head := headLines(bodyBytes, 50, 128*1024)
 			log.Printf(
 				"HTTP %d SERVER ERROR from %s\n--- first 50 lines ---\n%s\n---------------------",
 				resp.StatusCode,
 				reqCopy.URL,
 				head,
 			)
-
-			errorTracker.RecordError()
-			continue
-		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			retryAfter := resp.Header.Get("Retry-After")
-
-			delay := 2 * time.Second
-			if retryAfter != "" {
-				if secs, err := strconv.Atoi(retryAfter); err == nil {
-					delay = time.Duration(secs) * time.Second
-				}
-			}
-
-			log.Printf(
-				"HTTP 429 from %s — backing off for %s",
-				reqCopy.URL,
-				delay,
-			)
 			errorTracker.RecordError()
 
+		case resp.StatusCode == http.StatusTooManyRequests:
+			errorTracker.RecordError()
+			delay := parseRetryAfter(resp)
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
 				return
 			}
-			continue
-		}
-		if resp.StatusCode >= 400 {
-			metrics.record(latency, fmt.Errorf("status %d", resp.StatusCode))
 
-			ct := resp.Header.Get("Content-Type")
-
-			var msg string
-			switch {
-			case strings.Contains(ct, "text/html"):
-				msg = extractHTMLError(bodyBytes)
-			case strings.Contains(ct, "application/json"):
-				msg = truncate(string(bodyBytes), 256)
-			default:
-				msg = truncate(string(bodyBytes), 256)
-			}
-
-			log.Printf(
-				"HTTP %d error from %s: %s",
-				resp.StatusCode,
-				reqCopy.URL,
-				msg,
-			)
-
+		case resp.StatusCode >= 400:
+			finalErr = fmt.Errorf("client error %d", resp.StatusCode)
 			errorTracker.RecordError()
-			continue
+
+		default:
+			atomic.AddInt64(&metrics.SuccessTotal, 1)
+			errorTracker.RecordSuccess()
 		}
 
-		newTotal := atomic.AddInt64(&metrics.SuccessTotal, 1)
-
-		cacheHit := detectCacheHit(resp.Header)
-		// metrics.record(latency, nil)
-		metrics.recordWithCache(latency, nil, cacheHit)
+		metrics.record(latency, finalErr)
+		// cacheHit := detectCacheHit(resp.Header)
+		// metrics.recordWithCache(latency, nil, cacheHit)
 		errorTracker.RecordSuccess()
-
-		// stop benchmark exactly at limit
-		if newTotal >= maxSuccess {
-			return
-		}
 	}
 }
 
