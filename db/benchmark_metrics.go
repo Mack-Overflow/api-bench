@@ -9,6 +9,18 @@ type BenchmarkMetricsInsert struct {
 	AvgMs          float64
 	P50Ms          int64
 	P95Ms          int64
+	P99Ms          int64
+	MinMs          float64
+	MaxMs          float64
+
+	AvgResponseBytes int64
+	MinResponseBytes int64
+	MaxResponseBytes int64
+
+	Status2xx int
+	Status3xx int
+	Status4xx int
+	Status5xx int
 }
 
 func (db *DB) InsertBenchmarkMetrics(
@@ -23,8 +35,18 @@ func (db *DB) InsertBenchmarkMetrics(
 			avg_ms,
 			p50_ms,
 			p95_ms,
+			p99_ms,
+			min_ms,
+			max_ms,
+			avg_response_bytes,
+			min_response_bytes,
+			max_response_bytes,
+			status_2xx,
+			status_3xx,
+			status_4xx,
+			status_5xx,
 			created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
 	`,
 		m.BenchmarkRunID,
 		m.Requests,
@@ -32,6 +54,16 @@ func (db *DB) InsertBenchmarkMetrics(
 		m.AvgMs,
 		m.P50Ms,
 		m.P95Ms,
+		m.P99Ms,
+		m.MinMs,
+		m.MaxMs,
+		m.AvgResponseBytes,
+		m.MinResponseBytes,
+		m.MaxResponseBytes,
+		m.Status2xx,
+		m.Status3xx,
+		m.Status4xx,
+		m.Status5xx,
 	)
 	return 0, err
 }

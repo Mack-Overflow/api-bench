@@ -52,6 +52,15 @@ type BenchmarkMetrics struct {
 	Latencies     []time.Duration
 	AvgLatencyMs  float64 `json:"avg_latency_ms"`
 
+	// Response sizes (bytes)
+	ResponseSizes []int64
+
+	// Status code distribution
+	Status2xx int `json:"status_2xx"`
+	Status3xx int `json:"status_3xx"`
+	Status4xx int `json:"status_4xx"`
+	Status5xx int `json:"status_5xx"`
+
 	HitLat  []time.Duration
 	MissLat []time.Duration
 
@@ -106,24 +115,43 @@ func (m *BenchmarkMetrics) SnapshotLogs(logCursor int) (MetricsSnapshot, int) {
 	return snap, logCursor
 }
 
-func (m *BenchmarkMetrics) record(latency time.Duration, err error) {
+func (m *BenchmarkMetrics) record(latency time.Duration, err error, statusCode int, responseBytes int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	log.Printf(
-		"RECORD: req=%d err=%v lat=%s",
+		"RECORD: req=%d err=%v lat=%s status=%d bytes=%d",
 		m.RequestsTotal,
 		err != nil,
 		latency,
+		statusCode,
+		responseBytes,
 	)
 
 	m.RequestsTotal++
+
+	// Track status distribution
+	switch {
+	case statusCode >= 200 && statusCode < 300:
+		m.Status2xx++
+	case statusCode >= 300 && statusCode < 400:
+		m.Status3xx++
+	case statusCode >= 400 && statusCode < 500:
+		m.Status4xx++
+	case statusCode >= 500:
+		m.Status5xx++
+	}
+
 	if err != nil {
 		m.ErrorsTotal++
 		return
 	}
 
 	m.Latencies = append(m.Latencies, latency)
+
+	if responseBytes > 0 {
+		m.ResponseSizes = append(m.ResponseSizes, responseBytes)
+	}
 }
 
 func (m *BenchmarkMetrics) recordWithCache(

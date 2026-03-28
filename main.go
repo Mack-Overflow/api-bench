@@ -74,6 +74,18 @@ type BenchmarkResult struct {
 	AvgMs    float64 `json:"avg_ms"`
 	P50Ms    int64   `json:"p50_ms"`
 	P95Ms    int64   `json:"p95_ms"`
+	P99Ms    int64   `json:"p99_ms"`
+	MinMs    float64 `json:"min_ms"`
+	MaxMs    float64 `json:"max_ms"`
+
+	AvgResponseBytes int64 `json:"avg_response_bytes"`
+	MinResponseBytes int64 `json:"min_response_bytes"`
+	MaxResponseBytes int64 `json:"max_response_bytes"`
+
+	Status2xx int `json:"status_2xx"`
+	Status3xx int `json:"status_3xx"`
+	Status4xx int `json:"status_4xx"`
+	Status5xx int `json:"status_5xx"`
 
 	Cache struct {
 		Hits      int   `json:"hits"`

@@ -193,13 +193,52 @@ func runBenchmarkAsync(store *db.DB, run *BenchmarkRun) {
 	runsMu.Lock()
 	run.Status = StatusCompleted
 	latencies := append([]time.Duration(nil), metrics.Latencies...)
+	responseSizes := append([]int64(nil), metrics.ResponseSizes...)
 	run.EndedAt = &end
 	runsMu.Unlock()
+
 	result := &BenchmarkResult{
-		Requests: metrics.RequestsTotal,
-		Errors:   metrics.ErrorsTotal,
-		P50Ms:    percentile(latencies, 50).Milliseconds(),
-		P95Ms:    percentile(latencies, 95).Milliseconds(),
+		Requests:  metrics.RequestsTotal,
+		Errors:    metrics.ErrorsTotal,
+		P50Ms:     percentile(latencies, 50).Milliseconds(),
+		P95Ms:     percentile(latencies, 95).Milliseconds(),
+		P99Ms:     percentile(latencies, 99).Milliseconds(),
+		Status2xx: metrics.Status2xx,
+		Status3xx: metrics.Status3xx,
+		Status4xx: metrics.Status4xx,
+		Status5xx: metrics.Status5xx,
+	}
+
+	// Compute min/max latency
+	if len(latencies) > 0 {
+		// latencies are already sorted by percentile() calls above
+		result.MinMs = float64(latencies[0].Milliseconds())
+		result.MaxMs = float64(latencies[len(latencies)-1].Milliseconds())
+
+		var totalMs float64
+		for _, l := range latencies {
+			totalMs += float64(l.Milliseconds())
+		}
+		result.AvgMs = totalMs / float64(len(latencies))
+	}
+
+	// Compute response size stats
+	if len(responseSizes) > 0 {
+		minBytes := responseSizes[0]
+		maxBytes := responseSizes[0]
+		var totalBytes int64
+		for _, s := range responseSizes {
+			totalBytes += s
+			if s < minBytes {
+				minBytes = s
+			}
+			if s > maxBytes {
+				maxBytes = s
+			}
+		}
+		result.AvgResponseBytes = totalBytes / int64(len(responseSizes))
+		result.MinResponseBytes = minBytes
+		result.MaxResponseBytes = maxBytes
 	}
 
 	// Finalize run
@@ -214,12 +253,22 @@ func runBenchmarkAsync(store *db.DB, run *BenchmarkRun) {
 		}
 
 		return store.InsertBenchmarkMetrics(tx, db.BenchmarkMetricsInsert{
-			BenchmarkRunID: run.ID,
-			Requests:       result.Requests,
-			Errors:         result.Errors,
-			AvgMs:          result.AvgMs,
-			P50Ms:          result.P50Ms,
-			P95Ms:          result.P95Ms,
+			BenchmarkRunID:   run.ID,
+			Requests:         result.Requests,
+			Errors:           result.Errors,
+			AvgMs:            result.AvgMs,
+			P50Ms:            result.P50Ms,
+			P95Ms:            result.P95Ms,
+			P99Ms:            result.P99Ms,
+			MinMs:            result.MinMs,
+			MaxMs:            result.MaxMs,
+			AvgResponseBytes: result.AvgResponseBytes,
+			MinResponseBytes: result.MinResponseBytes,
+			MaxResponseBytes: result.MaxResponseBytes,
+			Status2xx:        result.Status2xx,
+			Status3xx:        result.Status3xx,
+			Status4xx:        result.Status4xx,
+			Status5xx:        result.Status5xx,
 		})
 	})
 

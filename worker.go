@@ -141,32 +141,35 @@ func benchmarkWorker(
 			log.Printf(err.Error())
 			metrics.addLog("error", fmt.Sprintf("worker %d: request failed: %s", workerID, sanitizeError(err)))
 			errorTracker.RecordError()
-			metrics.record(latency, err)
+			metrics.record(latency, err, 0, 0)
 			continue
 		}
 
 		bodyBytes, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
+		responseSize := int64(len(bodyBytes))
+		statusCode := resp.StatusCode
+
 		if readErr != nil {
 			finalErr = readErr
 			metrics.addLog("warn", fmt.Sprintf("worker %d: failed to read response body", workerID))
 		}
 		switch {
-		case resp.StatusCode >= 500:
-			finalErr = fmt.Errorf("server error %d", resp.StatusCode)
+		case statusCode >= 500:
+			finalErr = fmt.Errorf("server error %d", statusCode)
 
 			head := headLines(bodyBytes, 50, 128*1024)
 			log.Printf(
 				"HTTP %d SERVER ERROR from %s\n--- first 50 lines ---\n%s\n---------------------",
-				resp.StatusCode,
+				statusCode,
 				reqCopy.URL,
 				head,
 			)
-			metrics.addLog("error", fmt.Sprintf("worker %d: server error HTTP %d", workerID, resp.StatusCode))
+			metrics.addLog("error", fmt.Sprintf("worker %d: server error HTTP %d", workerID, statusCode))
 			errorTracker.RecordError()
 
-		case resp.StatusCode == http.StatusTooManyRequests:
+		case statusCode == http.StatusTooManyRequests:
 			errorTracker.RecordError()
 			delay := parseRetryAfter(resp)
 			metrics.addLog("warn", fmt.Sprintf("worker %d: rate limited (429), backing off %s", workerID, delay))
@@ -176,9 +179,9 @@ func benchmarkWorker(
 				return
 			}
 
-		case resp.StatusCode >= 400:
-			finalErr = fmt.Errorf("client error %d", resp.StatusCode)
-			metrics.addLog("error", fmt.Sprintf("worker %d: client error HTTP %d", workerID, resp.StatusCode))
+		case statusCode >= 400:
+			finalErr = fmt.Errorf("client error %d", statusCode)
+			metrics.addLog("error", fmt.Sprintf("worker %d: client error HTTP %d", workerID, statusCode))
 			errorTracker.RecordError()
 
 		default:
@@ -186,7 +189,7 @@ func benchmarkWorker(
 			errorTracker.RecordSuccess()
 		}
 
-		metrics.record(latency, finalErr)
+		metrics.record(latency, finalErr, statusCode, responseSize)
 		// cacheHit := detectCacheHit(resp.Header)
 		// metrics.recordWithCache(latency, nil, cacheHit)
 		errorTracker.RecordSuccess()
