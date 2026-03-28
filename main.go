@@ -30,6 +30,8 @@ type StartBenchmarkRequest struct {
 	EndpointVersionID *int64 `json:"endpoint_version_id,omitempty"`
 	ChangesMade       bool   `json:"changes_made"`
 
+	UserID            *int64 `json:"user_id,omitempty"`
+
 	Name    string          `json:"name"`
 	URL     string          `json:"url"`
 	Method  string          `json:"method"`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -67,6 +68,7 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 					req.Headers,
 					req.Params,
 					req.Body,
+					req.UserID,
 				)
 				if err != nil {
 					return 0, err
@@ -100,6 +102,7 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 				Concurrency:       req.Concurrency,
 				RateLimit:         req.RateLimit,
 				DurationSeconds:   req.DurationSec,
+				UserID:            req.UserID,
 			})
 		})
 		if err != nil {
@@ -147,7 +150,7 @@ func runBenchmarkAsync(store *db.DB, run *BenchmarkRun) {
 		return
 	}
 	const maxConsecutiveErrors = 3
-	errorTracker := NewErrorTracker(maxConsecutiveErrors, run.cancel)
+	errorTracker := NewErrorTracker(maxConsecutiveErrors, run.cancel, run.Metrics)
 
 	ctx := run.ctx
 
@@ -160,6 +163,8 @@ func runBenchmarkAsync(store *db.DB, run *BenchmarkRun) {
 		log.Printf("warming cache for %s", run.ID)
 		warmCache(run.Request)
 	}
+
+	run.Metrics.addLog("info", fmt.Sprintf("benchmark started: %d workers, %ds duration", run.Request.Concurrency, run.Request.DurationSec))
 
 	limiter := newRateLimiter(run.Request.RateLimit)
 	for i := 0; i < run.Request.Concurrency; i++ {
@@ -179,6 +184,8 @@ func runBenchmarkAsync(store *db.DB, run *BenchmarkRun) {
 
 	run.cancel()
 	wg.Wait()
+
+	run.Metrics.addLog("info", fmt.Sprintf("benchmark finished: %s", run.StopReason))
 
 	end := time.Now()
 
@@ -218,10 +225,7 @@ func runBenchmarkAsync(store *db.DB, run *BenchmarkRun) {
 
 	if err != nil {
 		log.Printf("failed to persist benchmark result: %v", err)
-	}
-
-	if err != nil {
-		log.Printf("failed to persist benchmark result: %v", err)
+		run.Metrics.addLog("error", "failed to persist benchmark results to database")
 	}
 
 	runsMu.Lock()

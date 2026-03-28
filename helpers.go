@@ -74,6 +74,23 @@ func toValidJSON(data []byte) string {
 	return string(data)
 }
 
+// sanitizeError returns an error message safe for streaming to clients,
+// stripping query strings and other potentially sensitive details.
+func sanitizeError(err error) string {
+	msg := err.Error()
+	// Strip query parameters from URLs in error messages
+	if idx := strings.Index(msg, "?"); idx != -1 {
+		// Find the end of the URL portion
+		end := strings.IndexAny(msg[idx:], " \"')")
+		if end == -1 {
+			msg = msg[:idx]
+		} else {
+			msg = msg[:idx] + msg[idx+end:]
+		}
+	}
+	return msg
+}
+
 func parseRetryAfter(resp *http.Response) time.Duration {
 	retryAfter := resp.Header.Get("Retry-After")
 	if retryAfter == "" {

@@ -38,6 +38,7 @@ func benchmarkStreamHandler(w http.ResponseWriter, r *http.Request) {
 	defer ticker.Stop()
 
 	ctx := r.Context()
+	logCursor := 0
 
 	for {
 		select {
@@ -45,7 +46,8 @@ func benchmarkStreamHandler(w http.ResponseWriter, r *http.Request) {
 			return
 
 		case <-ticker.C:
-			snap := run.Metrics.Snapshot()
+			var snap MetricsSnapshot
+			snap, logCursor = run.Metrics.SnapshotLogs(logCursor)
 
 			payload, _ := json.Marshal(snap)
 

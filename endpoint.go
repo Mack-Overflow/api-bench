@@ -60,6 +60,7 @@ func InsertEndpointTx(
 	headers []byte,
 	params []byte,
 	body []byte,
+	userID *int64,
 ) (int64, error) {
 	var endpointID int64
 
@@ -84,8 +85,9 @@ func InsertEndpointTx(
 			headers,
 			params,
 			body,
+			user_id,
 			created_at
-		) VALUES ($1, $2, $3, $4::json, $5::json, $6::json, NOW())
+		) VALUES ($1, $2, $3, $4::json, $5::json, $6::json, $7, NOW())
 		RETURNING id
 	`,
 		name,
@@ -94,6 +96,7 @@ func InsertEndpointTx(
 		headersValue,
 		paramsValue,
 		bodyValue,
+		userID,
 	).Scan(&endpointID)
 	return endpointID, err
 }

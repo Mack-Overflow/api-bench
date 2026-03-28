@@ -34,12 +34,14 @@ type ErrorTracker struct {
 	consecutive int
 	threshold   int
 	cancel      context.CancelFunc
+	metrics     *BenchmarkMetrics
 }
 
-func NewErrorTracker(threshold int, cancel context.CancelFunc) *ErrorTracker {
+func NewErrorTracker(threshold int, cancel context.CancelFunc, metrics *BenchmarkMetrics) *ErrorTracker {
 	return &ErrorTracker{
 		threshold: threshold,
 		cancel:    cancel,
+		metrics:   metrics,
 	}
 }
 
@@ -50,6 +52,9 @@ func (e *ErrorTracker) RecordError() {
 	e.consecutive++
 	if e.consecutive >= e.threshold {
 		log.Printf("error threshold reached (%d), stopping benchmark", e.threshold)
+		if e.metrics != nil {
+			e.metrics.addLog("error", fmt.Sprintf("consecutive error threshold reached (%d), stopping benchmark", e.threshold))
+		}
 		e.cancel()
 	}
 }
@@ -95,6 +100,7 @@ func benchmarkWorker(
 	wctx, err := setupWorker(req)
 	if err != nil {
 		log.Printf("worker %d setup failed: %v", workerID, err)
+		metrics.addLog("error", fmt.Sprintf("worker %d setup failed: %v", workerID, err))
 		return
 	}
 
@@ -133,6 +139,7 @@ func benchmarkWorker(
 			}
 
 			log.Printf(err.Error())
+			metrics.addLog("error", fmt.Sprintf("worker %d: request failed: %s", workerID, sanitizeError(err)))
 			errorTracker.RecordError()
 			metrics.record(latency, err)
 			continue
@@ -143,6 +150,7 @@ func benchmarkWorker(
 
 		if readErr != nil {
 			finalErr = readErr
+			metrics.addLog("warn", fmt.Sprintf("worker %d: failed to read response body", workerID))
 		}
 		switch {
 		case resp.StatusCode >= 500:
@@ -155,11 +163,13 @@ func benchmarkWorker(
 				reqCopy.URL,
 				head,
 			)
+			metrics.addLog("error", fmt.Sprintf("worker %d: server error HTTP %d", workerID, resp.StatusCode))
 			errorTracker.RecordError()
 
 		case resp.StatusCode == http.StatusTooManyRequests:
 			errorTracker.RecordError()
 			delay := parseRetryAfter(resp)
+			metrics.addLog("warn", fmt.Sprintf("worker %d: rate limited (429), backing off %s", workerID, delay))
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
@@ -168,6 +178,7 @@ func benchmarkWorker(
 
 		case resp.StatusCode >= 400:
 			finalErr = fmt.Errorf("client error %d", resp.StatusCode)
+			metrics.addLog("error", fmt.Sprintf("worker %d: client error HTTP %d", workerID, resp.StatusCode))
 			errorTracker.RecordError()
 
 		default:
