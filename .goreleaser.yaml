@@ -71,6 +71,7 @@ brews:
     repository:
       owner: Mack-Overflow
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
     homepage: "https://github.com/Mack-Overflow/api-bench"
     description: "API performance benchmarking from the command line"
@@ -83,6 +84,7 @@ brews:
     repository:
       owner: Mack-Overflow
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
     homepage: "https://github.com/Mack-Overflow/api-bench"
     description: "MCP server for AI-driven API performance benchmarking"
