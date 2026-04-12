@@ -15,7 +15,11 @@ import (
 	"github.com/Mack-Overflow/api-bench/db"
 )
 
-const version = "0.1.0"
+// version and commit are set by goreleaser via ldflags at build time.
+var (
+	version = "dev"
+	commit  = "none"
+)
 
 // stringSlice implements flag.Value for repeatable string flags.
 type stringSlice []string

@@ -1,0 +1,116 @@
+version: 2
+
+project_name: benchmarkr
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: benchmarkr
+    main: ./cmd/benchmarkr/
+    binary: benchmarkr
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}}
+
+  - id: benchmarkr-mcp
+    main: ./cmd/mcp/
+    binary: benchmarkr-mcp
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: benchmarkr
+    builds:
+      - benchmarkr
+    name_template: "benchmarkr_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+  - id: benchmarkr-mcp
+    builds:
+      - benchmarkr-mcp
+    name_template: "benchmarkr-mcp_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+brews:
+  - ids:
+      - benchmarkr
+    repository:
+      owner: Mack-Overflow
+      name: homebrew-tap
+    directory: Formula
+    homepage: "https://github.com/Mack-Overflow/api-bench"
+    description: "API performance benchmarking from the command line"
+    license: "MIT"
+    install: |
+      bin.install "benchmarkr"
+
+  - ids:
+      - benchmarkr-mcp
+    repository:
+      owner: Mack-Overflow
+      name: homebrew-tap
+    directory: Formula
+    homepage: "https://github.com/Mack-Overflow/api-bench"
+    description: "MCP server for AI-driven API performance benchmarking"
+    license: "MIT"
+    install: |
+      bin.install "benchmarkr-mcp"
+
+nfpms:
+  - id: benchmarkr-deb
+    builds:
+      - benchmarkr
+    package_name: benchmarkr
+    vendor: Mack-Overflow
+    homepage: "https://github.com/Mack-Overflow/api-bench"
+    description: "API performance benchmarking from the command line"
+    license: "MIT"
+    formats:
+      - deb
+      - rpm
+
+  - id: benchmarkr-mcp-deb
+    builds:
+      - benchmarkr-mcp
+    package_name: benchmarkr-mcp
+    vendor: Mack-Overflow
+    homepage: "https://github.com/Mack-Overflow/api-bench"
+    description: "MCP server for AI-driven API performance benchmarking"
+    license: "MIT"
+    formats:
+      - deb
+      - rpm

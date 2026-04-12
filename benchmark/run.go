@@ -69,7 +69,12 @@ func (r *ActiveRun) SnapshotLogs(cursor int) (MetricsSnapshot, int) {
 
 // Start launches a benchmark asynchronously and returns a handle.
 func Start(req StartBenchmarkRequest) *ActiveRun {
-	ctx, cancel := context.WithCancel(context.Background())
+	return StartWithContext(context.Background(), req)
+}
+
+// StartWithContext launches a benchmark with a parent context for cancellation propagation.
+func StartWithContext(parent context.Context, req StartBenchmarkRequest) *ActiveRun {
+	ctx, cancel := context.WithCancel(parent)
 
 	run := &ActiveRun{
 		Metrics:   &BenchmarkMetrics{},
