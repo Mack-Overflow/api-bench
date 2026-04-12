@@ -9,6 +9,53 @@ cd go
 go build -o benchmarkr ./cmd/benchmarkr/
 ```
 
+## Run via Docker
+
+If you don't have Go installed locally, you can run the CLI through Docker.
+
+### Build the image
+
+```bash
+docker build -t benchmarkr-cli ./go
+```
+
+### Run benchmarks
+
+```bash
+# Simple GET benchmark
+docker run --rm benchmarkr-cli ./benchmarkr run --url https://api.example.com/health
+
+# With concurrency and duration
+docker run --rm benchmarkr-cli ./benchmarkr run \
+  --url https://api.example.com/users \
+  --concurrency 10 \
+  --duration 30
+```
+
+### Use the running docker-compose container
+
+If the full stack is already running via `docker compose`, exec into the existing container:
+
+```bash
+docker compose exec go ./benchmarkr run --url https://api.example.com/health
+```
+
+### Persist results to the database from Docker
+
+When the container is on the `benchmarkr` network, it can reach the Postgres service directly:
+
+```bash
+docker run --rm --network benchmarkr_benchmarkr \
+  -e DB_URL="postgres://benchmarkr:secret@benchmarkr-postgres:5432/benchmarkr?sslmode=disable" \
+  benchmarkr-cli ./benchmarkr run --url https://api.example.com/health --store
+```
+
+Or via docker compose:
+
+```bash
+docker compose exec go ./benchmarkr run --url https://api.example.com/health --store
+```
+
 ## Quick Start
 
 ```bash
@@ -108,6 +155,7 @@ When running alongside the docker-compose stack, use `--store` to save results:
 export DB_URL="postgres://benchmarkr:secret@localhost:5432/benchmarkr?sslmode=disable"
 benchmarkr run --url https://api.example.com/health --store
 ```
+
 
 Results are stored in the same database used by the web UI, so they appear in your benchmark history.
 
