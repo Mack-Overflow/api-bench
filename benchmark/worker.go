@@ -1,4 +1,4 @@
-package main
+package benchmark
 
 import (
 	"bytes"
@@ -15,37 +15,29 @@ import (
 	"time"
 )
 
-type Result struct {
-	Latency  time.Duration
-	Error    bool
-	Status   int
-	CacheHit *bool
-}
-
 type workerContext struct {
 	client *http.Client
 	req    *http.Request
 	body   []byte
 }
 
-type ErrorTracker struct {
-	mu sync.Mutex
-
+type errorTracker struct {
+	mu          sync.Mutex
 	consecutive int
 	threshold   int
 	cancel      context.CancelFunc
 	metrics     *BenchmarkMetrics
 }
 
-func NewErrorTracker(threshold int, cancel context.CancelFunc, metrics *BenchmarkMetrics) *ErrorTracker {
-	return &ErrorTracker{
+func newErrorTracker(threshold int, cancel context.CancelFunc, metrics *BenchmarkMetrics) *errorTracker {
+	return &errorTracker{
 		threshold: threshold,
 		cancel:    cancel,
 		metrics:   metrics,
 	}
 }
 
-func (e *ErrorTracker) RecordError() {
+func (e *errorTracker) recordError() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -53,59 +45,35 @@ func (e *ErrorTracker) RecordError() {
 	if e.consecutive >= e.threshold {
 		log.Printf("error threshold reached (%d), stopping benchmark", e.threshold)
 		if e.metrics != nil {
-			e.metrics.addLog("error", fmt.Sprintf("consecutive error threshold reached (%d), stopping benchmark", e.threshold))
+			e.metrics.AddLog("error", fmt.Sprintf("consecutive error threshold reached (%d), stopping benchmark", e.threshold))
 		}
 		e.cancel()
 	}
 }
 
-func (e *ErrorTracker) RecordSuccess() {
+func (e *errorTracker) recordSuccess() {
 	e.mu.Lock()
 	e.consecutive = 0
 	e.mu.Unlock()
 }
 
-func worker(ctx context.Context, client *http.Client, jobs <-chan struct{}, results chan<- Result, req *http.Request) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-jobs:
-			start := time.Now()
-			resp, err := client.Do(req.Clone(ctx))
-			latency := time.Since(start)
-
-			if err != nil {
-				results <- Result{Latency: latency, Error: true}
-				continue
-			}
-
-			resp.Body.Close()
-			results <- Result{
-				Latency: latency,
-				Status:  resp.StatusCode,
-			}
-		}
-	}
-}
-
-func benchmarkWorker(
+func runWorker(
 	ctx context.Context,
 	workerID int,
 	req StartBenchmarkRequest,
 	metrics *BenchmarkMetrics,
-	errorTracker *ErrorTracker,
+	et *errorTracker,
 	limiter <-chan time.Time,
+	throttle time.Duration,
 ) {
 	wctx, err := setupWorker(req)
 	if err != nil {
 		log.Printf("worker %d setup failed: %v", workerID, err)
-		metrics.addLog("error", fmt.Sprintf("worker %d setup failed: %v", workerID, err))
+		metrics.AddLog("error", fmt.Sprintf("worker %d setup failed: %v", workerID, err))
 		return
 	}
 
 	for {
-		log.Printf("worker %d tick", workerID)
 		select {
 		case <-ctx.Done():
 			return
@@ -120,9 +88,7 @@ func benchmarkWorker(
 			}
 		}
 
-		// clone request
 		reqCopy := wctx.req.Clone(ctx)
-
 		if len(wctx.body) > 0 {
 			reqCopy.Body = io.NopCloser(bytes.NewReader(wctx.body))
 		}
@@ -138,10 +104,10 @@ func benchmarkWorker(
 				return
 			}
 
-			log.Printf(err.Error())
-			metrics.addLog("error", fmt.Sprintf("worker %d: request failed: %s", workerID, sanitizeError(err)))
-			errorTracker.RecordError()
-			metrics.record(latency, err, 0, 0)
+			log.Printf("worker %d: %v", workerID, err)
+			metrics.AddLog("error", fmt.Sprintf("worker %d: request failed: %s", workerID, sanitizeError(err)))
+			et.recordError()
+			metrics.Record(latency, err, 0, 0)
 			continue
 		}
 
@@ -153,8 +119,9 @@ func benchmarkWorker(
 
 		if readErr != nil {
 			finalErr = readErr
-			metrics.addLog("warn", fmt.Sprintf("worker %d: failed to read response body", workerID))
+			metrics.AddLog("warn", fmt.Sprintf("worker %d: failed to read response body", workerID))
 		}
+
 		switch {
 		case statusCode >= 500:
 			finalErr = fmt.Errorf("server error %d", statusCode)
@@ -166,13 +133,13 @@ func benchmarkWorker(
 				reqCopy.URL,
 				head,
 			)
-			metrics.addLog("error", fmt.Sprintf("worker %d: server error HTTP %d", workerID, statusCode))
-			errorTracker.RecordError()
+			metrics.AddLog("error", fmt.Sprintf("worker %d: server error HTTP %d", workerID, statusCode))
+			et.recordError()
 
 		case statusCode == http.StatusTooManyRequests:
-			errorTracker.RecordError()
+			et.recordError()
 			delay := parseRetryAfter(resp)
-			metrics.addLog("warn", fmt.Sprintf("worker %d: rate limited (429), backing off %s", workerID, delay))
+			metrics.AddLog("warn", fmt.Sprintf("worker %d: rate limited (429), backing off %s", workerID, delay))
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
@@ -181,18 +148,24 @@ func benchmarkWorker(
 
 		case statusCode >= 400:
 			finalErr = fmt.Errorf("client error %d", statusCode)
-			metrics.addLog("error", fmt.Sprintf("worker %d: client error HTTP %d", workerID, statusCode))
-			errorTracker.RecordError()
+			metrics.AddLog("error", fmt.Sprintf("worker %d: client error HTTP %d", workerID, statusCode))
+			et.recordError()
 
 		default:
 			atomic.AddInt64(&metrics.SuccessTotal, 1)
-			errorTracker.RecordSuccess()
+			et.recordSuccess()
 		}
 
-		metrics.record(latency, finalErr, statusCode, responseSize)
-		// cacheHit := detectCacheHit(resp.Header)
-		// metrics.recordWithCache(latency, nil, cacheHit)
-		errorTracker.RecordSuccess()
+		metrics.Record(latency, finalErr, statusCode, responseSize)
+		et.recordSuccess()
+
+		if throttle > 0 {
+			select {
+			case <-time.After(throttle):
+			case <-ctx.Done():
+				return
+			}
+		}
 	}
 }
 
@@ -202,7 +175,6 @@ func setupWorker(req StartBenchmarkRequest) (*workerContext, error) {
 		return nil, err
 	}
 
-	// req.Body is already []byte (json.RawMessage), no need to marshal
 	bodyBytes := []byte(req.Body)
 
 	httpReq, err := http.NewRequest(req.Method, parsedURL.String(), nil)
@@ -210,7 +182,6 @@ func setupWorker(req StartBenchmarkRequest) (*workerContext, error) {
 		return nil, err
 	}
 
-	// Unmarshal headers from JSON
 	if len(req.Headers) > 0 {
 		var headers map[string]string
 		if err := json.Unmarshal(req.Headers, &headers); err != nil {
@@ -221,7 +192,6 @@ func setupWorker(req StartBenchmarkRequest) (*workerContext, error) {
 		}
 	}
 
-	// Unmarshal params from JSON
 	if len(req.Params) > 0 {
 		var params map[string]string
 		if err := json.Unmarshal(req.Params, &params); err != nil {

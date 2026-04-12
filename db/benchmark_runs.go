@@ -9,6 +9,7 @@ type BenchmarkRunInsert struct {
 	Concurrency       int
 	RateLimit         int
 	DurationSeconds   int
+	ThrottleTimeMs    int
 	UserID            *int64
 }
 
@@ -24,16 +25,18 @@ func (db *DB) InsertBenchmarkRunTx(
 			concurrency,
 			rate_limit,
 			duration_seconds,
+			throttle_time_ms,
 			user_id,
 			status,
 			created_at
-		) VALUES ($1, $2, $3, $4, $5, 'started', NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, 'started', NOW())
 		RETURNING id
 	`,
 		input.EndpointVersionID,
 		input.Concurrency,
 		input.RateLimit,
 		input.DurationSeconds,
+		input.ThrottleTimeMs,
 		input.UserID,
 	).Scan(&id)
 

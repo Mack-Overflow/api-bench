@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/Mack-Overflow/api-bench/benchmark"
 )
 
 func benchmarkStreamHandler(w http.ResponseWriter, r *http.Request) {
@@ -15,7 +17,7 @@ func benchmarkStreamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	runsMu.RLock()
-	run, ok := runs[id]
+	sr, ok := runs[id]
 	runsMu.RUnlock()
 
 	if !ok {
@@ -46,8 +48,8 @@ func benchmarkStreamHandler(w http.ResponseWriter, r *http.Request) {
 			return
 
 		case <-ticker.C:
-			var snap MetricsSnapshot
-			snap, logCursor = run.Metrics.SnapshotLogs(logCursor)
+			var snap benchmark.MetricsSnapshot
+			snap, logCursor = sr.SnapshotLogs(logCursor)
 
 			payload, _ := json.Marshal(snap)
 
@@ -55,10 +57,9 @@ func benchmarkStreamHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "data: %s\n\n", payload)
 			flusher.Flush()
 
-			// Send final event
-			if run.Status == StatusCompleted {
+			if sr.GetStatus() == benchmark.StatusCompleted {
 				payload, _ := json.Marshal(map[string]any{
-					"reason": run.StopReason,
+					"reason": sr.GetStopReason(),
 				})
 				fmt.Fprintf(w, "event: done\n")
 				fmt.Fprintf(w, "data: %s\n\n", payload)

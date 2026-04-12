@@ -1,13 +1,11 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/Mack-Overflow/api-bench/db"
@@ -15,109 +13,8 @@ import (
 	"github.com/joho/godotenv"
 )
 
-type BenchmarkStatus string
-
-const (
-	StatusPending   BenchmarkStatus = "pending"
-	StatusRunning   BenchmarkStatus = "running"
-	StatusCompleted BenchmarkStatus = "completed"
-	StatusFailed    BenchmarkStatus = "failed"
-)
-
-type StartBenchmarkRequest struct {
-	RunID             string `json:"run_id"`
-	EndpointID        *int64 `json:"endpoint_id"`
-	EndpointVersionID *int64 `json:"endpoint_version_id,omitempty"`
-	ChangesMade       bool   `json:"changes_made"`
-
-	UserID            *int64 `json:"user_id,omitempty"`
-
-	Name    string          `json:"name"`
-	URL     string          `json:"url"`
-	Method  string          `json:"method"`
-	Headers json.RawMessage `json:"headers"`
-	Params  json.RawMessage `json:"params"`
-	Body    json.RawMessage `json:"body"`
-
-	Concurrency int       `json:"concurrency"`
-	RateLimit   int       `json:"rate_limit"`
-	DurationSec int       `json:"duration_seconds"`
-	CacheMode   CacheMode `json:"cache_mode"`
-}
-
-type StopReason string
-
-const (
-	StopCompleted StopReason = "completed"
-	StopCanceled  StopReason = "canceled"
-	StopErrors    StopReason = "consecutive_errors"
-)
-
-type BenchmarkRun struct {
-	ID        int
-	Request   StartBenchmarkRequest
-	Status    BenchmarkStatus
-	StartedAt time.Time
-	EndedAt   *time.Time
-
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	Metrics    *BenchmarkMetrics
-	Result     *BenchmarkResult
-	StopReason StopReason `json:"stop_reason,omitempty"`
-}
-
-type BenchmarkResult struct {
-	Requests int     `json:"requests"`
-	Errors   int     `json:"errors_total"`
-	AvgMs    float64 `json:"avg_ms"`
-	P50Ms    int64   `json:"p50_ms"`
-	P95Ms    int64   `json:"p95_ms"`
-	P99Ms    int64   `json:"p99_ms"`
-	MinMs    float64 `json:"min_ms"`
-	MaxMs    float64 `json:"max_ms"`
-
-	AvgResponseBytes int64 `json:"avg_response_bytes"`
-	MinResponseBytes int64 `json:"min_response_bytes"`
-	MaxResponseBytes int64 `json:"max_response_bytes"`
-
-	Status2xx int `json:"status_2xx"`
-	Status3xx int `json:"status_3xx"`
-	Status4xx int `json:"status_4xx"`
-	Status5xx int `json:"status_5xx"`
-
-	Cache struct {
-		Hits      int   `json:"hits"`
-		Misses    int   `json:"misses"`
-		HitP95Ms  int64 `json:"hit_p95_ms,omitempty"`
-		MissP95Ms int64 `json:"miss_p95_ms,omitempty"`
-	} `json:"cache"`
-}
-
-var (
-	runs   = make(map[string]*BenchmarkRun)
-	runsMu sync.RWMutex
-)
-
 func generateRunID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
-}
-
-func validateStartRequest(req *StartBenchmarkRequest) error {
-	if req.URL == "" {
-		return fmt.Errorf("url is required")
-	}
-	if req.Method == "" {
-		return fmt.Errorf("method is required")
-	}
-	if req.Concurrency <= 0 {
-		return fmt.Errorf("concurrency must be > 0")
-	}
-	if req.DurationSec <= 0 {
-		return fmt.Errorf("duration_seconds must be > 0")
-	}
-	return nil
 }
 
 func main() {
@@ -125,12 +22,11 @@ func main() {
 		log.Println("No .env file found, using environment variables")
 	}
 
-	// DB connection setup
-	sqlDB, err := openDB()
+	dsn := os.Getenv("DB_URL")
+	sqlDB, err := db.OpenDB(dsn)
 	if err != nil {
 		log.Fatal(err)
 	}
-	db.DefaultPool(sqlDB)
 
 	store := db.New(sqlDB)
 

@@ -1,4 +1,4 @@
-package main
+package benchmark
 
 import (
 	"bytes"
@@ -8,21 +8,13 @@ import (
 	"strings"
 )
 
-type CacheMode string
-
-const (
-	CacheDefault CacheMode = "default"
-	CacheBypass  CacheMode = "bypass"
-	CacheWarm    CacheMode = "warm"
-)
-
-func warmCache(req StartBenchmarkRequest) {
+func WarmCache(req StartBenchmarkRequest) {
 	wctx, err := setupWorker(req)
 	if err != nil {
 		return
 	}
 
-	for i := 0; i < 5; i++ { // configurable later
+	for i := 0; i < 5; i++ {
 		r := wctx.req.Clone(context.Background())
 		if len(wctx.body) > 0 {
 			r.Body = io.NopCloser(bytes.NewReader(wctx.body))
@@ -35,7 +27,7 @@ func warmCache(req StartBenchmarkRequest) {
 	}
 }
 
-func detectCacheHit(h http.Header) *bool {
+func DetectCacheHit(h http.Header) *bool {
 	if v := h.Get("X-Cache"); v != "" {
 		hit := strings.Contains(strings.ToUpper(v), "HIT")
 		return &hit
@@ -48,5 +40,5 @@ func detectCacheHit(h http.Header) *bool {
 		hit := v != "0"
 		return &hit
 	}
-	return nil // unknown
+	return nil
 }

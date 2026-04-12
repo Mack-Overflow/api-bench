@@ -1,6 +1,8 @@
-package main
+package benchmark
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -11,21 +13,7 @@ import (
 	"time"
 )
 
-func bodySummary(body any) string {
-	bytes, err := json.Marshal(body)
-	if err != nil {
-		return "<invalid body>"
-	}
-
-	const max = 200
-	if len(bytes) > max {
-		return fmt.Sprintf("%s... (%d bytes)", bytes[:max], len(bytes))
-	}
-
-	return string(bytes)
-}
-
-func percentile(latencies []time.Duration, p float64) time.Duration {
+func Percentile(latencies []time.Duration, p float64) time.Duration {
 	if len(latencies) == 0 {
 		return 0
 	}
@@ -42,6 +30,21 @@ func percentile(latencies []time.Duration, p float64) time.Duration {
 	return latencies[index]
 }
 
+func FormatBytes(b int64) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+	)
+	switch {
+	case b >= MB:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(MB))
+	case b >= KB:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}
+
 func redactHeader(key, value string) string {
 	switch strings.ToLower(key) {
 	case "authorization", "cookie", "x-api-key":
@@ -51,36 +54,23 @@ func redactHeader(key, value string) string {
 	}
 }
 
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+func bodySummary(body any) string {
+	bytes, err := json.Marshal(body)
+	if err != nil {
+		return "<invalid body>"
 	}
-	sort.Strings(keys)
-	return keys
+
+	const max = 200
+	if len(bytes) > max {
+		return fmt.Sprintf("%s... (%d bytes)", bytes[:max], len(bytes))
+	}
+
+	return string(bytes)
 }
 
-func normalizeJSON(b []byte) []byte {
-	if len(b) == 0 {
-		return []byte(`{}`)
-	}
-	return b
-}
-
-func toValidJSON(data []byte) string {
-	if len(data) == 0 {
-		return "{}"
-	}
-	return string(data)
-}
-
-// sanitizeError returns an error message safe for streaming to clients,
-// stripping query strings and other potentially sensitive details.
 func sanitizeError(err error) string {
 	msg := err.Error()
-	// Strip query parameters from URLs in error messages
 	if idx := strings.Index(msg, "?"); idx != -1 {
-		// Find the end of the URL portion
 		end := strings.IndexAny(msg[idx:], " \"')")
 		if end == -1 {
 			msg = msg[:idx]
@@ -91,13 +81,38 @@ func sanitizeError(err error) string {
 	return msg
 }
 
+func headLines(body []byte, maxLines int, maxBytes int) string {
+	if maxLines <= 0 || maxBytes <= 0 {
+		return ""
+	}
+
+	if len(body) > maxBytes {
+		body = body[:maxBytes]
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+
+	const maxScanTokenSize = 256 * 1024
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, maxScanTokenSize)
+
+	var lines []string
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+		if len(lines) >= maxLines {
+			break
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
 func parseRetryAfter(resp *http.Response) time.Duration {
 	retryAfter := resp.Header.Get("Retry-After")
 	if retryAfter == "" {
 		return 2 * time.Second
 	}
 
-	// Retry-After can be seconds or HTTP date
 	if secs, err := strconv.Atoi(retryAfter); err == nil {
 		if secs > 0 {
 			return time.Duration(secs) * time.Second
