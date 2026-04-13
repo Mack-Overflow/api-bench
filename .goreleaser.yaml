@@ -81,6 +81,7 @@ brews:
 
   - ids:
       - benchmarkr-mcp
+    name: benchmarkr-mcp
     repository:
       owner: Mack-Overflow
       name: homebrew-tap
