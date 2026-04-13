@@ -177,8 +177,6 @@ benchmarkr run --url https://api.example.com/health --duration 5 --json
   }
 }
 
-The same `benchmark/` package powers both the CLI and the HTTP server used by the web UI.
-
 ## MCP Server
 
 Benchmarkr ships an MCP server (`benchmarkr-mcp`) that lets AI agents run benchmarks via natural language. Install it the same way as the CLI:
