@@ -2,10 +2,41 @@
 
 A command-line tool for API performance testing. Runs benchmarks directly — no server required.
 
-## Build
+## Install
+
+### Homebrew (macOS/Linux)
 
 ```bash
-cd go
+brew tap mack-overflow/tap
+brew install benchmarkr
+```
+
+### apt (Debian/Ubuntu)
+
+```bash
+echo "deb [trusted=yes] https://apt.fury.io/mack-overflow/ /" | sudo tee /etc/apt/sources.list.d/benchmarkr.list
+sudo apt update
+sudo apt install benchmarkr
+```
+
+### yum (RHEL/Fedora)
+
+```bash
+sudo tee /etc/yum.repos.d/benchmarkr.repo <<EOF
+[benchmarkr]
+name=Benchmarkr
+baseurl=https://yum.fury.io/mack-overflow/
+enabled=1
+gpgcheck=0
+EOF
+sudo yum install benchmarkr
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/Mack-Overflow/api-bench.git
+cd api-bench/go
 go build -o benchmarkr ./cmd/benchmarkr/
 ```
 
@@ -170,6 +201,63 @@ benchmarkr CLI
 ```
 
 The same `benchmark/` package powers both the CLI and the HTTP server used by the web UI.
+
+## MCP Server
+
+Benchmarkr ships an MCP server (`benchmarkr-mcp`) that lets AI agents run benchmarks via natural language. Install it the same way as the CLI:
+
+```bash
+brew install mack-overflow/tap/benchmarkr-mcp   # Homebrew
+sudo apt install benchmarkr-mcp                  # apt
+sudo yum install benchmarkr-mcp                  # yum
+```
+
+Then add it to your agent's config:
+
+### Claude Code
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "benchmarkr": {
+      "command": "benchmarkr-mcp"
+    }
+  }
+}
+```
+
+### Cursor
+
+Add to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "benchmarkr": {
+      "command": "benchmarkr-mcp"
+    }
+  }
+}
+```
+
+### VS Code
+
+Add to `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "benchmarkr": {
+      "type": "stdio",
+      "command": "benchmarkr-mcp"
+    }
+  }
+}
+```
+
+The MCP server works without a database by default. To enable persistence, set the `DB_URL` environment variable.
 
 ## Environment Variables
 

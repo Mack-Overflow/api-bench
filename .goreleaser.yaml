@@ -94,26 +94,36 @@ brews:
       bin.install "benchmarkr-mcp"
 
 nfpms:
-  - id: benchmarkr-deb
+  - id: benchmarkr-nfpm
     builds:
       - benchmarkr
     package_name: benchmarkr
     vendor: Mack-Overflow
     homepage: "https://github.com/Mack-Overflow/api-bench"
     description: "API performance benchmarking from the command line"
+    maintainer: "Mack-Overflow <mack@benchmarkr.dev>"
     license: "MIT"
     formats:
       - deb
       - rpm
 
-  - id: benchmarkr-mcp-deb
+  - id: benchmarkr-mcp-nfpm
     builds:
       - benchmarkr-mcp
     package_name: benchmarkr-mcp
     vendor: Mack-Overflow
     homepage: "https://github.com/Mack-Overflow/api-bench"
     description: "MCP server for AI-driven API performance benchmarking"
+    maintainer: "Mack-Overflow <mack@benchmarkr.dev>"
     license: "MIT"
     formats:
       - deb
       - rpm
+
+publishers:
+  - name: fury.io
+    ids:
+      - benchmarkr-nfpm
+      - benchmarkr-mcp-nfpm
+    dir: "{{ dir .ArtifactPath }}"
+    cmd: curl -F package=@{{ .ArtifactName }} https://{{ .Env.FURY_TOKEN }}@push.fury.io/mack-overflow/
