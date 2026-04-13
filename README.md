@@ -176,29 +176,6 @@ benchmarkr run --url https://api.example.com/health --duration 5 --json
     "cache": { "hits": 0, "misses": 0 }
   }
 }
-```
-
-### Persist results to database
-
-When running alongside the docker-compose stack, use `--store` to save results:
-
-```bash
-export DB_URL="postgres://benchmarkr:secret@localhost:5432/benchmarkr?sslmode=disable"
-benchmarkr run --url https://api.example.com/health --store
-```
-
-
-Results are stored in the same database used by the web UI, so they appear in your benchmark history.
-
-## Architecture
-
-The CLI runs the benchmark engine directly in-process. No HTTP server is required.
-
-```
-benchmarkr CLI
-    └── benchmark/    (engine: workers, metrics, results)
-    └── db/           (optional: persistence with --store)
-```
 
 The same `benchmark/` package powers both the CLI and the HTTP server used by the web UI.
 
