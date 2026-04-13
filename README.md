@@ -1,6 +1,6 @@
 # Benchmarkr CLI
 
-A command-line tool for API performance testing. Runs benchmarks directly — no server required.
+A command-line and MCP tool for API performance testing. Runs benchmarks directly — no server required.
 
 ## Install
 
