@@ -93,7 +93,7 @@ func (t *Tools) handleRunBenchmark(ctx context.Context, request mcp.CallToolRequ
 		return toolError(err.Error()), nil
 	}
 
-	runID := fmt.Sprintf(x"%d", time.Now().UnixNano())
+	runID := fmt.Sprintf("%d", time.Now().UnixNano())
 	req.RunID = runID
 
 	run := benchmark.StartWithContext(ctx, req)
