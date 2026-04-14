@@ -71,6 +71,19 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 				endpointID = &id
 			} else {
 				endpointID = req.EndpointID
+				if req.ChangesMade {
+					if err := db.UpdateEndpointTx(
+						tx,
+						*endpointID,
+						req.Method,
+						req.URL,
+						req.Headers,
+						req.Params,
+						req.Body,
+					); err != nil {
+						return 0, err
+					}
+				}
 			}
 
 			if req.ChangesMade || req.EndpointVersionID == nil {

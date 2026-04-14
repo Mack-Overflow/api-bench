@@ -105,6 +105,48 @@ func InsertEndpointTx(
 	return endpointID, err
 }
 
+func UpdateEndpointTx(
+	tx *sql.Tx,
+	endpointID int64,
+	method string,
+	url string,
+	headers []byte,
+	params []byte,
+	body []byte,
+) error {
+	var headersValue interface{} = headers
+	var paramsValue interface{} = params
+	var bodyValue interface{} = body
+
+	if len(headers) == 0 {
+		headersValue = nil
+	}
+	if len(params) == 0 {
+		paramsValue = nil
+	}
+	if len(body) == 0 {
+		bodyValue = nil
+	}
+
+	_, err := tx.Exec(`
+		UPDATE endpoints
+		SET method = $1,
+			url = $2,
+			headers = $3::json,
+			params = $4::json,
+			body = $5::json
+		WHERE id = $6
+	`,
+		method,
+		url,
+		headersValue,
+		paramsValue,
+		bodyValue,
+		endpointID,
+	)
+	return err
+}
+
 // Endpoint represents a saved API endpoint.
 type Endpoint struct {
 	ID        int64           `json:"id"`
