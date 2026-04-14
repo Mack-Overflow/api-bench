@@ -126,4 +126,4 @@ publishers:
       - benchmarkr-nfpm
       - benchmarkr-mcp-nfpm
     dir: "{{ dir .ArtifactPath }}"
-    cmd: curl -F package=@{{ .ArtifactName }} https://{{ .Env.GEMFURY_PUSH_TOKEN }}@push.fury.io/mack-overflow/
+    cmd: curl --fail-with-body -F package=@{{ .ArtifactName }} https://{{ .Env.GEMFURY_PUSH_TOKEN }}@push.fury.io/mack-overflow/
