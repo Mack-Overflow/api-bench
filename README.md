@@ -203,6 +203,15 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
+Then add a `CLAUDE.md` to your project root so the agent knows to use benchmarkr:
+
+```markdown
+# Benchmarking
+
+Use the benchmarkr MCP tools (run_benchmark, compare_endpoints, regression_test) for all API benchmarking tasks.
+Do not install or use external tools like hey, ab, or bombardier.
+```
+
 ### Cursor
 
 Add to `~/.cursor/mcp.json`:
@@ -217,19 +226,13 @@ Add to `~/.cursor/mcp.json`:
 }
 ```
 
-### VS Code
+Then add a `.cursorrules` to your project root:
 
-Add to `.vscode/mcp.json`:
+```markdown
+# Benchmarking
 
-```json
-{
-  "servers": {
-    "benchmarkr": {
-      "type": "stdio",
-      "command": "benchmarkr-mcp"
-    }
-  }
-}
+Use the benchmarkr MCP tools (run_benchmark, compare_endpoints, regression_test) for all API benchmarking tasks.
+Do not install or use external tools like hey, ab, or bombardier.
 ```
 
 The MCP server works without a database by default. To enable persistence, set the `DB_URL` environment variable.
