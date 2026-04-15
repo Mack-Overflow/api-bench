@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"flag"
@@ -12,7 +13,10 @@ import (
 	"time"
 
 	"github.com/Mack-Overflow/api-bench/benchmark"
+	"github.com/Mack-Overflow/api-bench/config"
 	"github.com/Mack-Overflow/api-bench/db"
+	"github.com/Mack-Overflow/api-bench/storage"
+	"github.com/google/uuid"
 )
 
 // version and commit are set by goreleaser via ldflags at build time.
@@ -40,6 +44,8 @@ func main() {
 	switch os.Args[1] {
 	case "run":
 		err = runCmd(os.Args[2:])
+	case "config":
+		err = configCmd(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("benchmarkr %s\n", version)
 	case "help", "--help", "-h":
@@ -64,10 +70,12 @@ Usage:
 
 Commands:
   run       Run a benchmark against a target URL
+  config    Manage storage configuration
   version   Print version information
   help      Show this help message
 
 Run "benchmarkr run --help" for benchmark options.
+Run "benchmarkr config --help" for configuration options.
 `)
 }
 
@@ -99,8 +107,8 @@ func runCmd(args []string) error {
 	jsonOutput := fs.Bool("json", false, "Output final results as JSON")
 
 	// Storage
-	store := fs.Bool("store", false, "Persist results to database (requires DB_URL)")
-	fs.BoolVar(store, "s", false, "Persist results to database (shorthand)")
+	store := fs.Bool("store", false, "Persist results to configured storage backend")
+	fs.BoolVar(store, "s", false, "Persist results to configured storage backend (shorthand)")
 
 	fs.Parse(args)
 
@@ -164,6 +172,16 @@ func runCmd(args []string) error {
 		return err
 	}
 
+	// Pre-validate storage config before starting the benchmark
+	var storeCfg *config.Config
+	if *store {
+		cfg, _, cfgErr := config.Load()
+		if cfgErr != nil || !cfg.IsStorageConfigured() {
+			return fmt.Errorf("No storage configured. Run 'benchmarkr config init' first")
+		}
+		storeCfg = cfg
+	}
+
 	if !*jsonOutput {
 		printBanner(req)
 	}
@@ -188,12 +206,12 @@ func runCmd(args []string) error {
 
 	result, stopReason := run.Wait()
 
-	// Persist to DB if --store flag is set
+	// Persist if --store flag is set (config already validated pre-run)
 	if *store {
-		if err := persistResult(req, result, stopReason); err != nil {
+		if err := persistWithConfig(storeCfg, req, result, stopReason, run.StartedAt); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to persist results: %v\n", err)
 		} else if !*jsonOutput {
-			fmt.Println("  Results stored to database.")
+			fmt.Println("  Results stored.")
 		}
 	}
 
@@ -252,12 +270,44 @@ func clearLines(n int) {
 	}
 }
 
-// --- DB persistence (--store) ---
+// --- Storage persistence (--store) ---
+func persistWithConfig(cfg *config.Config, req benchmark.StartBenchmarkRequest, result *benchmark.BenchmarkResult, stopReason benchmark.StopReason, startedAt time.Time) error {
+	switch cfg.Storage.Mode {
+	case "cloud":
+		return persistResultCloud(req, result, stopReason)
+	case "local":
+		backend, err := storage.NewBackendFromConfig(cfg)
+		if err != nil {
+			return err
+		}
+		run := storage.BenchmarkRun{
+			ID:             uuid.New().String(),
+			Name:           req.Name,
+			URL:            req.URL,
+			Method:         req.Method,
+			Headers:        req.Headers,
+			Params:         req.Params,
+			Body:           req.Body,
+			Concurrency:    req.Concurrency,
+			DurationSec:    req.DurationSec,
+			RateLimit:      req.RateLimit,
+			ThrottleTimeMs: req.ThrottleTimeMs,
+			CacheMode:      string(req.CacheMode),
+			StartedAt:      startedAt,
+			EndedAt:        time.Now(),
+			StopReason:     string(stopReason),
+			Result:         *result,
+		}
+		return backend.SaveRun(context.Background(), run)
+	default:
+		return fmt.Errorf("unknown storage mode: %s", cfg.Storage.Mode)
+	}
+}
 
-func persistResult(req benchmark.StartBenchmarkRequest, result *benchmark.BenchmarkResult, stopReason benchmark.StopReason) error {
+func persistResultCloud(req benchmark.StartBenchmarkRequest, result *benchmark.BenchmarkResult, stopReason benchmark.StopReason) error {
 	dbURL := os.Getenv("DB_URL")
 	if dbURL == "" {
-		return fmt.Errorf("DB_URL environment variable is required for --store")
+		return fmt.Errorf("DB_URL environment variable is required for cloud storage mode")
 	}
 
 	sqlDB, err := db.OpenDB(dbURL)
