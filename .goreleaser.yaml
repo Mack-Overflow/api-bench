@@ -54,6 +54,9 @@ archives:
       - goos: windows
         format: zip
 
+release:
+  replace_existing_artifacts: true
+
 checksum:
   name_template: "checksums.txt"
 
