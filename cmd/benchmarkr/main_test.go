@@ -61,6 +61,55 @@ func run(args ...string) (stdout, stderr string, exitCode int) {
 	return outBuf.String(), errBuf.String(), exitCode
 }
 
+// runWithEnv executes the binary with extra environment variables set.
+func runWithEnv(env map[string]string, args ...string) (stdout, stderr string, exitCode int) {
+	cmd := exec.Command(testBinary, args...)
+	var outBuf, errBuf strings.Builder
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	// Copy current env, then override specified keys
+	envList := os.Environ()
+	for k, v := range env {
+		prefix := k + "="
+		found := false
+		for i, e := range envList {
+			if strings.HasPrefix(e, prefix) {
+				envList[i] = prefix + v
+				found = true
+				break
+			}
+		}
+		if !found {
+			envList = append(envList, prefix+v)
+		}
+	}
+	cmd.Env = envList
+
+	err := cmd.Run()
+	exitCode = 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+		}
+	}
+	return outBuf.String(), errBuf.String(), exitCode
+}
+
+// writeTestConfig writes a minimal config TOML to a temp file and returns its path.
+func writeTestConfig(t *testing.T, mode, driver string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	content := fmt.Sprintf("[storage]\nmode = %q\n\n[storage.local]\ndriver = %q\n\n[cloud]\napi_url = \"https://test.example.com\"\ntoken_env = \"BENCH_CLOUD_TOKEN\"\n", mode, driver)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 // newTestServer returns a simple HTTP server that records request details.
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -534,32 +583,89 @@ func TestRunBody(t *testing.T) {
 // run --store without DB_URL
 // ---------------------------------------------------------------------------
 
-func TestRunStoreWithoutDBURL(t *testing.T) {
+func TestRunStoreWithoutConfig(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
-	// Ensure DB_URL is not set
-	stdout, stderr, code := run("run", "--url", ts.URL, "--duration", "1", "--store")
-	// The benchmark should still complete, but warn about persistence failure.
-	if code != 0 {
-		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	// Point BENCH_CONFIG to a nonexistent file so no config is found
+	env := map[string]string{"BENCH_CONFIG": filepath.Join(t.TempDir(), "nope.toml")}
+	_, stderr, code := runWithEnv(env, "run", "--url", ts.URL, "--duration", "1", "--store")
+	if code == 0 {
+		t.Fatal("expected non-zero exit when --store used without config")
 	}
-	if !strings.Contains(stderr, "DB_URL") && !strings.Contains(stdout, "DB_URL") {
-		t.Fatalf("expected warning about DB_URL, got:\nstdout: %s\nstderr: %s", stdout, stderr)
+	if !strings.Contains(stderr, "No storage configured") {
+		t.Fatalf("expected 'No storage configured' error, got:\n%s", stderr)
 	}
 }
 
-func TestRunStoreShortFlag(t *testing.T) {
+func TestRunStoreShortFlagWithoutConfig(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
-	stdout, stderr, code := run("run", "--url", ts.URL, "--duration", "1", "-s")
+	// -s is shorthand for --store, should produce same config error
+	env := map[string]string{"BENCH_CONFIG": filepath.Join(t.TempDir(), "nope.toml")}
+	_, stderr, code := runWithEnv(env, "run", "--url", ts.URL, "--duration", "1", "-s")
+	if code == 0 {
+		t.Fatal("expected non-zero exit when -s used without config")
+	}
+	if !strings.Contains(stderr, "No storage configured") {
+		t.Fatalf("expected 'No storage configured' error, got:\n%s", stderr)
+	}
+}
+
+func TestRunStoreWithCloudConfigNoDBURL(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	cfgPath := writeTestConfig(t, "cloud", "")
+	env := map[string]string{"BENCH_CONFIG": cfgPath, "DB_URL": ""}
+
+	// Benchmark should run, but persistence fails with DB_URL warning
+	stdout, stderr, code := runWithEnv(env, "run", "--url", ts.URL, "--duration", "1", "--store")
 	if code != 0 {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	// -s is shorthand for --store, should produce same DB_URL warning
-	if !strings.Contains(stderr, "DB_URL") && !strings.Contains(stdout, "DB_URL") {
-		t.Fatalf("expected warning about DB_URL with -s flag")
+	if !strings.Contains(stderr, "DB_URL") {
+		t.Fatalf("expected warning about DB_URL, got:\nstderr: %s", stderr)
+	}
+	// Results should still be printed
+	if !strings.Contains(stdout, "Results") {
+		t.Fatalf("expected results output even when persistence fails, got:\n%s", stdout)
+	}
+}
+
+func TestRunStoreWithLocalJSONConfig(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	outputDir := t.TempDir()
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "config.toml")
+	content := fmt.Sprintf("[storage]\nmode = \"local\"\n\n[storage.local]\ndriver = \"json\"\n\n[storage.local.json]\noutput_dir = %q\n", outputDir)
+	os.WriteFile(cfgPath, []byte(content), 0644)
+	env := map[string]string{"BENCH_CONFIG": cfgPath}
+
+	stdout, stderr, code := runWithEnv(env, "run", "--url", ts.URL, "--duration", "1", "--store")
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if strings.Contains(stderr, "warning") {
+		t.Fatalf("unexpected warning in stderr: %s", stderr)
+	}
+	if !strings.Contains(stdout, "Results stored") {
+		t.Fatalf("expected 'Results stored' message, got:\n%s", stdout)
+	}
+
+	// Verify a run file was written
+	matches, _ := filepath.Glob(filepath.Join(outputDir, "*.json"))
+	runFiles := 0
+	for _, m := range matches {
+		if filepath.Base(m) != "index.json" {
+			runFiles++
+		}
+	}
+	if runFiles != 1 {
+		t.Fatalf("expected 1 run file in %s, got %d", outputDir, runFiles)
 	}
 }
 
@@ -763,5 +869,131 @@ func TestRunLatencyMetrics(t *testing.T) {
 
 	if result.Result.MaxMs < result.Result.MinMs {
 		t.Fatalf("max_ms (%f) < min_ms (%f)", result.Result.MaxMs, result.Result.MinMs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// config subcommand
+// ---------------------------------------------------------------------------
+
+func TestConfigNoArgs(t *testing.T) {
+	stdout, _, code := run("config")
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "benchmarkr config") {
+		t.Fatalf("expected config usage text, got:\n%s", stdout)
+	}
+}
+
+func TestConfigHelp(t *testing.T) {
+	stdout, _, code := run("config", "help")
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	if !strings.Contains(stdout, "init") || !strings.Contains(stdout, "show") {
+		t.Fatalf("expected config help listing subcommands, got:\n%s", stdout)
+	}
+}
+
+func TestConfigSetAndGet(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	env := map[string]string{"BENCH_CONFIG": cfgPath}
+
+	// set creates a new config from defaults when none exists
+	stdout, _, code := runWithEnv(env, "config", "set", "storage.mode", "cloud")
+	if code != 0 {
+		t.Fatalf("config set exit %d\nstdout: %s", code, stdout)
+	}
+	if !strings.Contains(stdout, "storage.mode = cloud") {
+		t.Fatalf("expected confirmation, got:\n%s", stdout)
+	}
+
+	// get reads back the value
+	stdout, _, code = runWithEnv(env, "config", "get", "storage.mode")
+	if code != 0 {
+		t.Fatalf("config get exit %d", code)
+	}
+	if strings.TrimSpace(stdout) != "cloud" {
+		t.Fatalf("expected 'cloud', got %q", strings.TrimSpace(stdout))
+	}
+}
+
+func TestConfigSetValidation(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	env := map[string]string{"BENCH_CONFIG": cfgPath}
+
+	_, stderr, code := runWithEnv(env, "config", "set", "storage.mode", "invalid")
+	if code == 0 {
+		t.Fatal("expected non-zero exit for invalid storage.mode value")
+	}
+	if !strings.Contains(stderr, "must be") {
+		t.Fatalf("expected validation error, got:\n%s", stderr)
+	}
+}
+
+func TestConfigShow(t *testing.T) {
+	cfgPath := writeTestConfig(t, "local", "json")
+	env := map[string]string{"BENCH_CONFIG": cfgPath}
+
+	stdout, _, code := runWithEnv(env, "config", "show")
+	if code != 0 {
+		t.Fatalf("config show exit %d", code)
+	}
+	if !strings.Contains(stdout, "Resolved from:") {
+		t.Fatalf("expected source annotation, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, `mode = "local"`) {
+		t.Fatalf("expected storage.mode in output, got:\n%s", stdout)
+	}
+}
+
+func TestConfigGetWithoutConfig(t *testing.T) {
+	env := map[string]string{"BENCH_CONFIG": filepath.Join(t.TempDir(), "nope.toml")}
+
+	_, stderr, code := runWithEnv(env, "config", "get", "storage.mode")
+	if code == 0 {
+		t.Fatal("expected non-zero exit when config doesn't exist")
+	}
+	if !strings.Contains(stderr, "BENCH_CONFIG") {
+		t.Fatalf("expected error about missing config, got:\n%s", stderr)
+	}
+}
+
+func TestConfigTestJSON(t *testing.T) {
+	dir := t.TempDir()
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "config.toml")
+
+	content := fmt.Sprintf("[storage]\nmode = \"local\"\n\n[storage.local]\ndriver = \"json\"\n\n[storage.local.json]\noutput_dir = %q\n", dir)
+	os.WriteFile(cfgPath, []byte(content), 0644)
+	env := map[string]string{"BENCH_CONFIG": cfgPath}
+
+	stdout, _, code := runWithEnv(env, "config", "test")
+	if code != 0 {
+		t.Fatalf("config test exit %d", code)
+	}
+	if !strings.Contains(stdout, "JSON storage OK") {
+		t.Fatalf("expected 'JSON storage OK', got:\n%s", stdout)
+	}
+}
+
+func TestConfigUnknownSubcommand(t *testing.T) {
+	_, stderr, code := run("config", "foobar")
+	if code == 0 {
+		t.Fatal("expected non-zero exit for unknown config subcommand")
+	}
+	if !strings.Contains(stderr, "unknown config command") {
+		t.Fatalf("expected 'unknown config command' error, got:\n%s", stderr)
+	}
+}
+
+func TestHelpListsConfigCommand(t *testing.T) {
+	stdout, _, code := run("help")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(stdout, "config") {
+		t.Fatalf("expected 'config' in help output, got:\n%s", stdout)
 	}
 }
