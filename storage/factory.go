@@ -25,9 +25,9 @@ func newLocalBackend(cfg *config.Config) (StorageBackend, error) {
 		dir := config.ExpandPath(cfg.Storage.Local.JSON.OutputDir)
 		return NewJSONBackend(dir), nil
 	case "postgres":
-		return nil, fmt.Errorf("postgres backend not yet implemented (coming in Step 3)")
+		return NewPostgresBackend(cfg.Storage.Local.Postgres)
 	case "mysql":
-		return nil, fmt.Errorf("mysql backend not yet implemented (coming in Step 3)")
+		return NewMySQLBackend(cfg.Storage.Local.MySQL)
 	default:
 		return nil, fmt.Errorf("unknown storage driver: %q", cfg.Storage.Local.Driver)
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/Mack-Overflow/api-bench/config"
+	"github.com/Mack-Overflow/api-bench/storage"
 )
 
 func configCmd(args []string) error {
@@ -295,20 +296,20 @@ func testLocalStorage(cfg *config.Config) error {
 
 	case "postgres":
 		pg := cfg.Storage.Local.Postgres
-		if os.Getenv(pg.PasswordEnv) == "" {
-			fmt.Printf("  Warning: $%s is not set\n", pg.PasswordEnv)
-		}
 		fmt.Printf("  PostgreSQL: %s@%s:%d/%s\n", pg.User, pg.Host, pg.Port, pg.Database)
-		fmt.Println("  (Connection test requires database backend — coming in a future release)")
+		if err := storage.TestConnection(cfg); err != nil {
+			return fmt.Errorf("PostgreSQL connection failed: %w", err)
+		}
+		fmt.Println("  PostgreSQL storage OK — connection verified")
 		return nil
 
 	case "mysql":
 		my := cfg.Storage.Local.MySQL
-		if os.Getenv(my.PasswordEnv) == "" {
-			fmt.Printf("  Warning: $%s is not set\n", my.PasswordEnv)
-		}
 		fmt.Printf("  MySQL: %s@%s:%d/%s\n", my.User, my.Host, my.Port, my.Database)
-		fmt.Println("  (Connection test requires database backend — coming in a future release)")
+		if err := storage.TestConnection(cfg); err != nil {
+			return fmt.Errorf("MySQL connection failed: %w", err)
+		}
+		fmt.Println("  MySQL storage OK — connection verified")
 		return nil
 
 	default:
