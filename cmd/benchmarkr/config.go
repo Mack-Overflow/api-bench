@@ -105,9 +105,9 @@ func configInitCmd() error {
 		}
 	} else {
 		// Cloud mode prompts
-		fmt.Printf("  Cloud API URL [%s]: ", cfg.Cloud.APIURL)
+		fmt.Printf("  Cloud API URL [%s]: ", cfg.Cloud.API_URL)
 		if v := readLine(reader); v != "" {
-			cfg.Cloud.APIURL = v
+			cfg.Cloud.API_URL = v
 		}
 
 		fmt.Printf("  Token env var name [%s]: ", cfg.Cloud.TokenEnv)
@@ -326,7 +326,7 @@ func testCloudStorage(cfg *config.Config) error {
 			fmt.Printf("  Warning: $%s is not set\n", tokenEnv)
 		}
 	}
-	fmt.Printf("  API URL: %s\n", cfg.Cloud.APIURL)
+	fmt.Printf("  API URL: %s\n", cfg.Cloud.API_URL)
 
 	dbURL := os.Getenv("DB_URL")
 	if dbURL != "" {

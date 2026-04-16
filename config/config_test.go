@@ -36,7 +36,7 @@ func TestRoundTrip(t *testing.T) {
 			},
 		},
 		Cloud: CloudConfig{
-			APIURL:   "https://bench.example.com/api",
+			API_URL:   "https://bench.example.com/api",
 			TokenEnv: "MY_TOKEN",
 		},
 	}
@@ -65,7 +65,7 @@ func TestRoundTrip(t *testing.T) {
 	assertStr(t, "storage.local.mysql.database", got.Storage.Local.MySQL.Database, want.Storage.Local.MySQL.Database)
 	assertStr(t, "storage.local.mysql.user", got.Storage.Local.MySQL.User, want.Storage.Local.MySQL.User)
 	assertStr(t, "storage.local.mysql.password_env", got.Storage.Local.MySQL.PasswordEnv, want.Storage.Local.MySQL.PasswordEnv)
-	assertStr(t, "cloud.api_url", got.Cloud.APIURL, want.Cloud.APIURL)
+	assertStr(t, "cloud.api_url", got.Cloud.API_URL, want.Cloud.API_URL)
 	assertStr(t, "cloud.token_env", got.Cloud.TokenEnv, want.Cloud.TokenEnv)
 }
 
@@ -81,7 +81,7 @@ func TestResolutionOrder(t *testing.T) {
 	// Create configs with distinct values
 	globalCfg := Defaults()
 	globalCfg.Storage.Mode = "cloud"
-	globalCfg.Cloud.APIURL = "https://global.example.com"
+	globalCfg.Cloud.API_URL = "https://global.example.com"
 	Save(globalCfg, globalPath)
 
 	// Project config only overrides storage.mode — cloud.api_url should come from global.
@@ -129,8 +129,8 @@ func TestResolutionOrder(t *testing.T) {
 			t.Fatalf("expected mode=local from project, got %s", cfg.Storage.Mode)
 		}
 		// cloud.api_url should be inherited from global
-		if cfg.Cloud.APIURL != "https://global.example.com" {
-			t.Fatalf("expected api_url from global, got %s", cfg.Cloud.APIURL)
+		if cfg.Cloud.API_URL != "https://global.example.com" {
+			t.Fatalf("expected api_url from global, got %s", cfg.Cloud.API_URL)
 		}
 	})
 
@@ -260,7 +260,7 @@ func TestIsStorageConfigured(t *testing.T) {
 		},
 		{
 			name: "cloud with api_url",
-			cfg:  Config{Storage: StorageConfig{Mode: "cloud"}, Cloud: CloudConfig{APIURL: "https://example.com"}},
+			cfg:  Config{Storage: StorageConfig{Mode: "cloud"}, Cloud: CloudConfig{API_URL: "https://example.com"}},
 			want: true,
 		},
 		{

@@ -57,7 +57,7 @@ type MySQLDriverConfig struct {
 
 // CloudConfig holds settings for the cloud API backend.
 type CloudConfig struct {
-	APIURL   string `toml:"api_url"`
+	API_URL   string `toml:"api_url"`
 	TokenEnv string `toml:"token_env"`
 }
 
@@ -94,7 +94,7 @@ func Defaults() *Config {
 			},
 		},
 		Cloud: CloudConfig{
-			APIURL:   "https://api.yourdomain.com",
+			API_URL:   "https://api.yourdomain.com",
 			TokenEnv: "BENCH_CLOUD_TOKEN",
 		},
 	}
@@ -215,7 +215,7 @@ func ExpandPath(path string) string {
 func (c *Config) IsStorageConfigured() bool {
 	switch c.Storage.Mode {
 	case "cloud":
-		return c.Cloud.APIURL != ""
+		return c.Cloud.API_URL != ""
 	case "local":
 		return c.Storage.Local.Driver != ""
 	default:
@@ -255,7 +255,7 @@ func (c *Config) Get(key string) (string, error) {
 	case "storage.local.mysql.password_env":
 		return c.Storage.Local.MySQL.PasswordEnv, nil
 	case "cloud.api_url":
-		return c.Cloud.APIURL, nil
+		return c.Cloud.API_URL, nil
 	case "cloud.token_env":
 		return c.Cloud.TokenEnv, nil
 	default:
@@ -309,7 +309,7 @@ func (c *Config) Set(key, value string) error {
 	case "storage.local.mysql.password_env":
 		c.Storage.Local.MySQL.PasswordEnv = value
 	case "cloud.api_url":
-		c.Cloud.APIURL = value
+		c.Cloud.API_URL = value
 	case "cloud.token_env":
 		c.Cloud.TokenEnv = value
 	default:
