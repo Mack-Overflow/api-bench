@@ -293,7 +293,9 @@ func (c *Config) Set(key, value string) error {
 	case "storage.local.postgres.password_env":
 		c.Storage.Local.Postgres.PasswordEnv = value
 	case "storage.local.postgres.ssl":
-		c.Storage.Local.Postgres.SSL = value == "true"
+		if value != "true" && value != "false" {
+			return fmt.Errorf("storage.local.postgres.ssl must be 'true' or 'false', got %q", value)
+		}
 	case "storage.local.mysql.host":
 		c.Storage.Local.MySQL.Host = value
 	case "storage.local.mysql.port":

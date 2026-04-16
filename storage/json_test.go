@@ -113,7 +113,12 @@ func TestSaveRunUpdatesIndex(t *testing.T) {
 	ctx := context.Background()
 
 	run := makeRun("https://example.com/test", time.Now())
-	backend.SaveRun(ctx, run)
+	if err := backend.SaveRun(ctx, run); err != nil {
+		t.Fatalf("SaveRun 1: %v", err)
+	}
+	if err := backend.SaveRun(ctx, run); err != nil {
+		t.Fatalf("SaveRun 2: %v", err)
+	}
 
 	indexPath := filepath.Join(dir, "index.json")
 	data, err := os.ReadFile(indexPath)
@@ -124,8 +129,8 @@ func TestSaveRunUpdatesIndex(t *testing.T) {
 	if err := json.Unmarshal(data, &entries); err != nil {
 		t.Fatalf("parsing index: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 index entry, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 index entries after two saves, got %d", len(entries))
 	}
 	if entries[0].ID != run.ID {
 		t.Errorf("index ID mismatch")
@@ -418,7 +423,7 @@ func TestCorruptIndexRebuild(t *testing.T) {
 
 func TestCorruptRunFileSkipped(t *testing.T) {
 	dir := t.TempDir()
-	backend := NewJSONBackend(dir)
+	backend := NewJSONBackendWithLogger(dir, nil) // suppress warnings in test output
 	ctx := context.Background()
 
 	// Save a valid run

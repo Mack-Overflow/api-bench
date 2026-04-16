@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -98,10 +99,14 @@ func configInitCmd() error {
 			}
 
 		case "postgres":
-			promptPostgres(reader, &cfg.Storage.Local.Postgres)
+			if err := promptPostgres(reader, &cfg.Storage.Local.Postgres); err != nil {
+				return err
+			}
 
 		case "mysql":
-			promptMySQL(reader, &cfg.Storage.Local.MySQL)
+			if err := promptMySQL(reader, &cfg.Storage.Local.MySQL); err != nil {
+				return err
+			}
 		}
 	} else {
 		// Cloud mode prompts
@@ -116,7 +121,10 @@ func configInitCmd() error {
 		}
 	}
 
-	path := config.DefaultGlobalPath()
+	path := os.Getenv("BENCH_CONFIG")
+	if path == "" {
+		path = config.DefaultGlobalPath()
+	}
 	if err := config.Save(cfg, path); err != nil {
 		return err
 	}
@@ -127,7 +135,7 @@ func configInitCmd() error {
 	return nil
 }
 
-func promptPostgres(reader *bufio.Reader, pg *config.PostgresDriverConfig) {
+func promptPostgres(reader *bufio.Reader, pg *config.PostgresDriverConfig) error {
 	fmt.Printf("  PostgreSQL host [%s]: ", pg.Host)
 	if v := readLine(reader); v != "" {
 		pg.Host = v
@@ -135,7 +143,11 @@ func promptPostgres(reader *bufio.Reader, pg *config.PostgresDriverConfig) {
 
 	fmt.Printf("  PostgreSQL port [%d]: ", pg.Port)
 	if v := readLine(reader); v != "" {
-		fmt.Sscanf(v, "%d", &pg.Port)
+		port, err := strconv.Atoi(v)
+		if err != nil || port <= 0 || port > 65535 {
+			return fmt.Errorf("invalid port: %s", v)
+		}
+		pg.Port = port
 	}
 
 	fmt.Printf("  Database name [%s]: ", pg.Database)
@@ -157,9 +169,10 @@ func promptPostgres(reader *bufio.Reader, pg *config.PostgresDriverConfig) {
 	if v := readLine(reader); v == "true" {
 		pg.SSL = true
 	}
+	return nil
 }
 
-func promptMySQL(reader *bufio.Reader, my *config.MySQLDriverConfig) {
+func promptMySQL(reader *bufio.Reader, my *config.MySQLDriverConfig) error {
 	fmt.Printf("  MySQL host [%s]: ", my.Host)
 	if v := readLine(reader); v != "" {
 		my.Host = v
@@ -167,7 +180,11 @@ func promptMySQL(reader *bufio.Reader, my *config.MySQLDriverConfig) {
 
 	fmt.Printf("  MySQL port [%d]: ", my.Port)
 	if v := readLine(reader); v != "" {
-		fmt.Sscanf(v, "%d", &my.Port)
+		port, err := strconv.Atoi(v)
+		if err != nil || port <= 0 || port > 65535 {
+			return fmt.Errorf("invalid port: %s", v)
+		}
+		my.Port = port
 	}
 
 	fmt.Printf("  Database name [%s]: ", my.Database)
@@ -184,6 +201,7 @@ func promptMySQL(reader *bufio.Reader, my *config.MySQLDriverConfig) {
 	if v := readLine(reader); v != "" {
 		my.PasswordEnv = v
 	}
+	return nil
 }
 
 func readLine(reader *bufio.Reader) string {

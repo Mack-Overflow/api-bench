@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -15,14 +17,30 @@ import (
 // JSONBackend stores benchmark runs as individual JSON files in a directory,
 // with a lightweight index.json for fast listing.
 type JSONBackend struct {
-	dir string
-	mu  sync.Mutex // protects index reads/writes within a process
+	dir    string
+	mu     sync.Mutex  // protects index reads/writes within a process
+	logger *log.Logger // diagnostics (corrupt files, rebuilds); nil disables output
 }
 
 // NewJSONBackend creates a JSONBackend that stores files under dir.
 // The directory is created on the first SaveRun call.
 func NewJSONBackend(dir string) *JSONBackend {
-	return &JSONBackend{dir: dir}
+	return &JSONBackend{
+		dir:    dir,
+		logger: log.New(os.Stderr, "", 0),
+	}
+}
+
+// NewJSONBackendWithLogger is like NewJSONBackend but uses the given logger
+// for diagnostics. Pass nil to suppress all output.
+func NewJSONBackendWithLogger(dir string, logger *log.Logger) *JSONBackend {
+	return &JSONBackend{dir: dir, logger: logger}
+}
+
+func (b *JSONBackend) logf(format string, args ...any) {
+	if b.logger != nil {
+		b.logger.Printf(format, args...)
+	}
 }
 
 // indexEntry extends RunSummary with the on-disk filename.
@@ -53,7 +71,10 @@ func (b *JSONBackend) SaveRun(_ context.Context, run BenchmarkRun) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	entries, _ := b.readIndex() // ignore error; start fresh if corrupt
+	entries, err := b.readIndex()
+	if err != nil {
+		return fmt.Errorf("reading index: %w", err)
+	}
 	entries = append(entries, indexEntry{
 		RunSummary: SummaryFromRun(run),
 		File:       filename,
@@ -90,8 +111,11 @@ func (b *JSONBackend) ListRuns(_ context.Context, filter RunFilter) ([]RunSummar
 func (b *JSONBackend) GetRun(_ context.Context, id string) (BenchmarkRun, error) {
 	// Try index lookup first
 	b.mu.Lock()
-	entries, _ := b.readIndex()
+	entries, err := b.readIndex()
 	b.mu.Unlock()
+	if err != nil {
+		return BenchmarkRun{}, err
+	}
 
 	for _, e := range entries {
 		if e.ID == id {
@@ -123,7 +147,10 @@ func (b *JSONBackend) DeleteRun(_ context.Context, id string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	entries, _ := b.readIndex()
+	entries, err := b.readIndex()
+	if err != nil {
+		return fmt.Errorf("reading index: %w", err)
+	}
 
 	found := false
 	remaining := make([]indexEntry, 0, len(entries))
@@ -189,7 +216,7 @@ func (b *JSONBackend) rebuildFromFiles() ([]indexEntry, error) {
 		}
 		run, err := readRunFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: skipping corrupt file %s: %v\n", filepath.Base(path), err)
+			b.logf("warning: skipping corrupt file %s: %v", filepath.Base(path), err)
 			continue
 		}
 		entries = append(entries, indexEntry{
@@ -218,10 +245,14 @@ func readRunFile(path string) (BenchmarkRun, error) {
 	return run, nil
 }
 
+// atomicWrite writes data to a temp file then renames it into place.
 func atomicWrite(path string, data []byte) error {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		os.Remove(path)
 	}
 	return os.Rename(tmp, path)
 }

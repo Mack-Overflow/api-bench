@@ -396,8 +396,12 @@ func (b *dbBackend) DeleteRun(ctx context.Context, id string) error {
 	defer tx.Rollback()
 
 	// Delete child records first
-	tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM benchmark_latency_samples WHERE benchmark_run_id = %s", b.ph(1)), runID)
-	tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM benchmark_metrics WHERE benchmark_run_id = %s", b.ph(1)), runID)
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM benchmark_latency_samples WHERE benchmark_run_id = %s", b.ph(1)), runID); err != nil {
+		return fmt.Errorf("delete latency samples: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM benchmark_metrics WHERE benchmark_run_id = %s", b.ph(1)), runID); err != nil {
+		return fmt.Errorf("delete metrics: %w", err)
+	}
 
 	// Delete the run
 	result, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM benchmark_runs WHERE id = %s", b.ph(1)), runID)
