@@ -2,7 +2,7 @@
 
 A command-line and MCP tool for API performance testing. Runs benchmarks directly — no server required.
 
-> **Full documentation:** [benchmarkr.dev/docs](https://benchmarkr.dev/docs)
+> **Full documentation:** [benchmarkr-1.onrender.com/docs](https://benchmarkr.dev/docs)
 
 ## Install
 
