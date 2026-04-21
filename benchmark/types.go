@@ -82,6 +82,29 @@ type CacheResult struct {
 	MissP95Ms int64 `json:"miss_p95_ms,omitempty"`
 }
 
+// Limits defines upper bounds for benchmark parameters.
+// Defaults are applied to HTTP API requests; future licensing/tokens can override these.
+type Limits struct {
+	MaxConcurrency int
+	MaxDurationSec int
+}
+
+// DefaultLimits are the standard limits enforced on HTTP API requests.
+var DefaultLimits = Limits{
+	MaxConcurrency: 10,
+	MaxDurationSec: 30,
+}
+
+// ApplyLimits clamps request parameters to fit within the given limits.
+func ApplyLimits(req *StartBenchmarkRequest, limits Limits) {
+	if limits.MaxConcurrency > 0 && req.Concurrency > limits.MaxConcurrency {
+		req.Concurrency = limits.MaxConcurrency
+	}
+	if limits.MaxDurationSec > 0 && req.DurationSec > limits.MaxDurationSec {
+		req.DurationSec = limits.MaxDurationSec
+	}
+}
+
 func ValidateRequest(req *StartBenchmarkRequest) error {
 	if req.URL == "" {
 		return fmt.Errorf("url is required")

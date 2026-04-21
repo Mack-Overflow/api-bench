@@ -14,13 +14,18 @@ import (
 // serverRun wraps an ActiveRun with server-specific metadata.
 type serverRun struct {
 	*benchmark.ActiveRun
-	dbID int64
+	dbID   int64
+	userID int64
+	runID  string
 }
 
 var (
-	runs   = make(map[string]*serverRun)
-	runsMu sync.RWMutex
+	runs           = make(map[string]*serverRun)
+	activeUserRuns = make(map[int64]string) // userID → runID (one active run per user)
+	runsMu         sync.RWMutex
 )
+
+const maxRequestBodyBytes int64 = 256 << 20 // 256 MB
 
 func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -29,16 +34,49 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 			return
 		}
 
+		// Extract authenticated user ID from context (set by withAPIKeyAuth)
+		userID, ok := r.Context().Value(userIDKey).(int64)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		// Enforce one active benchmark run per user
+		runsMu.RLock()
+		if existingRunID, active := activeUserRuns[userID]; active {
+			if sr, exists := runs[existingRunID]; exists && sr.GetStatus() == benchmark.StatusRunning {
+				runsMu.RUnlock()
+				http.Error(w, "a benchmark is already running — stop it before starting another", http.StatusConflict)
+				return
+			}
+		}
+		runsMu.RUnlock()
+
+		// Cap incoming request body size
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+
 		var req benchmark.StartBenchmarkRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		// SSRF prevention: block private/reserved IPs from the server
+		if err := validateBenchmarkURL(req.URL); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+
+		// Apply server-side limits (configurable for future licensing)
+		benchmark.ApplyLimits(&req, benchmark.DefaultLimits)
 
 		if err := benchmark.ValidateRequest(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+
+		// Use the authenticated user ID, not the client-supplied one
+		req.UserID = &userID
 
 		if req.EndpointID != nil && *req.EndpointID == 0 {
 			req.EndpointID = nil
@@ -116,7 +154,7 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 		})
 		if err != nil {
 			log.Printf("insert benchmark run failed: %v", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, "failed to create benchmark run", http.StatusInternalServerError)
 			return
 		}
 
@@ -125,10 +163,13 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 		sr := &serverRun{
 			ActiveRun: activeRun,
 			dbID:      benchmarkRunID,
+			userID:    userID,
+			runID:     runID,
 		}
 
 		runsMu.Lock()
 		runs[runID] = sr
+		activeUserRuns[userID] = runID
 		runsMu.Unlock()
 
 		// Persist results to DB when benchmark completes
@@ -143,6 +184,13 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 
 func persistOnComplete(store *db.DB, sr *serverRun) {
 	result, stopReason := sr.Wait()
+
+	// Release the per-user active run slot so the user can start another
+	runsMu.Lock()
+	if activeUserRuns[sr.userID] == sr.runID {
+		delete(activeUserRuns, sr.userID)
+	}
+	runsMu.Unlock()
 
 	if err := store.MarkBenchmarkRunRunning(int(sr.dbID)); err != nil {
 		log.Printf("failed to mark run running: %v", err)

@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+const maxResponseBodyBytes int64 = 512 << 20 // 512 MB
+
 type workerContext struct {
 	client *http.Client
 	req    *http.Request
@@ -111,11 +113,36 @@ func runWorker(
 			continue
 		}
 
-		bodyBytes, readErr := io.ReadAll(resp.Body)
+		statusCode := resp.StatusCode
+		var responseSize int64
+		var readErr error
+		var bodyHead []byte
+
+		// Prefer Content-Length metadata to avoid reading large bodies into memory
+		if resp.ContentLength > maxResponseBodyBytes {
+			resp.Body.Close()
+			finalErr = fmt.Errorf("response exceeds size limit (%d bytes)", resp.ContentLength)
+			metrics.AddLog("error", fmt.Sprintf("worker %d: response too large (%d bytes, limit %d)", workerID, resp.ContentLength, maxResponseBodyBytes))
+			et.recordError()
+			metrics.Record(latency, finalErr, statusCode, resp.ContentLength)
+			continue
+		}
+
+		// Read body with a hard cap; only buffer content for 5xx diagnostic logging
+		limited := io.LimitReader(resp.Body, maxResponseBodyBytes)
+		if statusCode >= 500 {
+			bodyHead, _ = io.ReadAll(io.LimitReader(limited, 128*1024))
+		}
+		discarded, discardErr := io.Copy(io.Discard, limited)
 		resp.Body.Close()
 
-		responseSize := int64(len(bodyBytes))
-		statusCode := resp.StatusCode
+		responseSize = int64(len(bodyHead)) + discarded
+		if resp.ContentLength >= 0 {
+			responseSize = resp.ContentLength
+		}
+		if discardErr != nil {
+			readErr = discardErr
+		}
 
 		if readErr != nil {
 			finalErr = readErr
@@ -126,7 +153,7 @@ func runWorker(
 		case statusCode >= 500:
 			finalErr = fmt.Errorf("server error %d", statusCode)
 
-			head := headLines(bodyBytes, 50, 128*1024)
+			head := headLines(bodyHead, 50, 128*1024)
 			log.Printf(
 				"HTTP %d SERVER ERROR from %s\n--- first 50 lines ---\n%s\n---------------------",
 				statusCode,

@@ -44,10 +44,17 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("/benchmarks/start", startBenchmarkHandler(store))
+
+	// Protected routes — require valid API key
+	protectedMux := http.NewServeMux()
+	protectedMux.HandleFunc("/benchmarks/start", startBenchmarkHandler(store))
+	protectedMux.HandleFunc("/benchmarks/stop", stopBenchmarkHandler)
+	mux.Handle("/benchmarks/start", withAPIKeyAuth(store, protectedMux))
+	mux.Handle("/benchmarks/stop", withAPIKeyAuth(store, protectedMux))
+
+	// Public routes — run_id acts as capability token
 	mux.HandleFunc("/benchmarks/status", getBenchmarkStatusHandler)
 	mux.HandleFunc("/benchmarks/stream", benchmarkStreamHandler)
-	mux.HandleFunc("/benchmarks/stop", stopBenchmarkHandler)
 
 	handler := withCORS(mux)
 

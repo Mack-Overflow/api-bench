@@ -2,6 +2,8 @@
 
 A command-line and MCP tool for API performance testing. Runs benchmarks directly — no server required.
 
+> **Full documentation:** [benchmarkr.dev/docs](https://benchmarkr.dev/docs)
+
 ## Install
 
 ### Homebrew (macOS/Linux)
@@ -191,7 +193,7 @@ Then add it to your agent's config:
 
 ### Claude Code
 
-Add to `~/.claude/settings.json`:
+Add to `.mcp.json` in your project root directory:
 
 ```json
 {
@@ -214,7 +216,7 @@ Do not install or use external tools like hey, ab, or bombardier.
 
 ### Cursor
 
-Add to `~/.cursor/mcp.json`:
+Add to `~/.cursor/mcp.json` in your project root directory:
 
 ```json
 {
