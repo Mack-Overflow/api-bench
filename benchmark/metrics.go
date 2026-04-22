@@ -79,7 +79,7 @@ func (m *BenchmarkMetrics) SnapshotLogs(logCursor int) (MetricsSnapshot, int) {
 	return snap, logCursor
 }
 
-func (m *BenchmarkMetrics) Record(latency time.Duration, err error, statusCode int, responseBytes int64) {
+func (m *BenchmarkMetrics) Record(latency time.Duration, err error, statusCode int, responseBytes int64, cacheHit *bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -105,6 +105,16 @@ func (m *BenchmarkMetrics) Record(latency time.Duration, err error, statusCode i
 
 	if responseBytes > 0 {
 		m.ResponseSizes = append(m.ResponseSizes, responseBytes)
+	}
+
+	if cacheHit != nil {
+		if *cacheHit {
+			m.CacheHits++
+			m.HitLat = append(m.HitLat, latency)
+		} else {
+			m.CacheMisses++
+			m.MissLat = append(m.MissLat, latency)
+		}
 	}
 }
 

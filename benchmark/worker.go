@@ -109,11 +109,12 @@ func runWorker(
 			log.Printf("worker %d: %v", workerID, err)
 			metrics.AddLog("error", fmt.Sprintf("worker %d: request failed: %s", workerID, sanitizeError(err)))
 			et.recordError()
-			metrics.Record(latency, err, 0, 0)
+			metrics.Record(latency, err, 0, 0, nil)
 			continue
 		}
 
 		statusCode := resp.StatusCode
+		cacheHit := DetectCacheHit(resp.Header)
 		var responseSize int64
 		var readErr error
 		var bodyHead []byte
@@ -124,7 +125,7 @@ func runWorker(
 			finalErr = fmt.Errorf("response exceeds size limit (%d bytes)", resp.ContentLength)
 			metrics.AddLog("error", fmt.Sprintf("worker %d: response too large (%d bytes, limit %d)", workerID, resp.ContentLength, maxResponseBodyBytes))
 			et.recordError()
-			metrics.Record(latency, finalErr, statusCode, resp.ContentLength)
+			metrics.Record(latency, finalErr, statusCode, resp.ContentLength, nil)
 			continue
 		}
 
@@ -183,7 +184,7 @@ func runWorker(
 			et.recordSuccess()
 		}
 
-		metrics.Record(latency, finalErr, statusCode, responseSize)
+		metrics.Record(latency, finalErr, statusCode, responseSize, cacheHit)
 		et.recordSuccess()
 
 		if throttle > 0 {
