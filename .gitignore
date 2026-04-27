@@ -2,3 +2,5 @@
 .env
 /benchmarkr
 main
+samples/
+api-bench

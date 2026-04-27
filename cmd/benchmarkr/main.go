@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -46,6 +45,8 @@ func main() {
 		err = runCmd(os.Args[2:])
 	case "config":
 		err = configCmd(os.Args[2:])
+	case "endpoints":
+		err = endpointsCmd(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("benchmarkr %s\n", version)
 	case "help", "--help", "-h":
@@ -69,13 +70,15 @@ Usage:
   benchmarkr <command> [flags]
 
 Commands:
-  run       Run a benchmark against a target URL
-  config    Manage storage configuration
-  version   Print version information
-  help      Show this help message
+  run         Run a benchmark against a target URL
+  config      Manage storage configuration
+  endpoints   Manage local endpoint definitions
+  version     Print version information
+  help        Show this help message
 
 Run "benchmarkr run --help" for benchmark options.
 Run "benchmarkr config --help" for configuration options.
+Run "benchmarkr endpoints --help" for endpoint management.
 `)
 }
 
@@ -85,8 +88,13 @@ func runCmd(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 
 	// Target
-	targetURL := fs.String("url", "", "Target URL to benchmark (required)")
+	targetURL := fs.String("url", "", "Target URL to benchmark (required if --endpoint not used)")
 	method := fs.String("method", "GET", "HTTP method")
+	endpointName := fs.String("endpoint", "", "Run a saved endpoint by name (from local config file)")
+	fs.StringVar(endpointName, "e", "", "Run a saved endpoint by name (shorthand)")
+	endpointVersion := fs.Int("version", 0, "Specific endpoint version to run (requires --endpoint and cloud auth)")
+	fs.IntVar(endpointVersion, "v", 0, "Specific endpoint version (shorthand)")
+	endpointFile := fs.String("file", "", "Endpoints file (default: discovered from CWD)")
 
 	// Benchmark config
 	concurrency := fs.Int("concurrency", 1, "Number of concurrent workers")
@@ -94,7 +102,7 @@ func runCmd(args []string) error {
 	rateLimit := fs.Int("rate-limit", 0, "Max requests per second (0 = unlimited)")
 	throttle := fs.Int("throttle", 0, "Per-request delay in milliseconds")
 	cacheMode := fs.String("cache-mode", "default", "Cache mode: default, bypass, warm")
-	name := fs.String("name", "", "Benchmark name (defaults to URL)")
+	name := fs.String("name", "", "Benchmark name (defaults to URL or endpoint name)")
 
 	// Request options
 	var headers stringSlice
@@ -112,60 +120,62 @@ func runCmd(args []string) error {
 
 	fs.Parse(args)
 
-	if *targetURL == "" {
+	setFlags := flagsExplicitlySet(fs)
+
+	// Mutually exclusive: --url and --endpoint
+	if *targetURL != "" && *endpointName != "" {
+		return fmt.Errorf("--url and --endpoint are mutually exclusive")
+	}
+	if *targetURL == "" && *endpointName == "" {
 		fs.Usage()
-		return fmt.Errorf("\n--url is required")
+		return fmt.Errorf("\nprovide --url or --endpoint")
+	}
+	if *endpointVersion != 0 && *endpointName == "" {
+		return fmt.Errorf("--version requires --endpoint")
 	}
 
-	if *name == "" {
-		*name = *targetURL
-	}
-
-	// Build headers JSON
-	headersMap := make(map[string]string)
-	for _, h := range headers {
-		parts := strings.SplitN(h, ":", 2)
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid header format %q (expected \"Key: Value\")", h)
+	// Build the request: from local config (-e) or from raw flags (--url).
+	var req benchmark.StartBenchmarkRequest
+	if *endpointName != "" {
+		built, err := buildRequestFromEndpoint(buildOpts{
+			EndpointName:    *endpointName,
+			EndpointVersion: *endpointVersion,
+			EndpointFile:    *endpointFile,
+			Store:           *store,
+			Method:          *method,
+			Headers:         headers,
+			Params:          params,
+			Body:            *body,
+			Concurrency:     *concurrency,
+			Duration:        *duration,
+			RateLimit:       *rateLimit,
+			Throttle:        *throttle,
+			CacheMode:       *cacheMode,
+			Name:            *name,
+			SetFlags:        setFlags,
+		})
+		if err != nil {
+			return err
 		}
-		headersMap[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-	}
-	headersJSON, _ := json.Marshal(headersMap)
-
-	// Build params JSON
-	paramsMap := make(map[string]string)
-	for _, p := range params {
-		parts := strings.SplitN(p, "=", 2)
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid param format %q (expected \"key=value\")", p)
-		}
-		paramsMap[parts[0]] = parts[1]
-	}
-	paramsJSON, _ := json.Marshal(paramsMap)
-
-	// Build body JSON
-	var bodyJSON json.RawMessage
-	if *body != "" {
-		if !json.Valid([]byte(*body)) {
-			return fmt.Errorf("--body must be valid JSON")
-		}
-		bodyJSON = json.RawMessage(*body)
+		req = built
 	} else {
-		bodyJSON = json.RawMessage(`{}`)
-	}
-
-	req := benchmark.StartBenchmarkRequest{
-		Name:           *name,
-		URL:            *targetURL,
-		Method:         strings.ToUpper(*method),
-		Headers:        headersJSON,
-		Params:         paramsJSON,
-		Body:           bodyJSON,
-		Concurrency:    *concurrency,
-		RateLimit:      *rateLimit,
-		DurationSec:    *duration,
-		ThrottleTimeMs: *throttle,
-		CacheMode:      benchmark.CacheMode(*cacheMode),
+		built, err := buildRequestFromFlags(buildOpts{
+			URL:         *targetURL,
+			Method:      *method,
+			Headers:     headers,
+			Params:      params,
+			Body:        *body,
+			Concurrency: *concurrency,
+			Duration:    *duration,
+			RateLimit:   *rateLimit,
+			Throttle:    *throttle,
+			CacheMode:   *cacheMode,
+			Name:        *name,
+		})
+		if err != nil {
+			return err
+		}
+		req = built
 	}
 
 	if err := benchmark.ValidateRequest(&req); err != nil {
@@ -318,41 +328,22 @@ func persistResultCloud(req benchmark.StartBenchmarkRequest, result *benchmark.B
 
 	store := db.New(sqlDB)
 
-	_, err = db.WithTx(store, func(tx *sql.Tx) (int64, error) {
-		endpointID, err := db.InsertEndpointTx(
-			tx, req.Name, req.Method, req.URL,
-			req.Headers, req.Params, req.Body, req.UserID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf("insert endpoint: %w", err)
-		}
-
-		versionID, err := db.InsertEndpointVersionTx(
-			tx, endpointID, 1, req.Method,
-			req.Headers, req.Params, req.Body, req.URL,
-		)
-		if err != nil {
-			return 0, fmt.Errorf("insert endpoint version: %w", err)
-		}
-
-		runID, err := store.InsertBenchmarkRunTx(tx, db.BenchmarkRunInsert{
-			EndpointVersionID: &versionID,
-			Concurrency:       req.Concurrency,
-			RateLimit:         req.RateLimit,
-			DurationSeconds:   req.DurationSec,
-			ThrottleTimeMs:    req.ThrottleTimeMs,
-			UserID:            req.UserID,
-		})
-		if err != nil {
-			return 0, fmt.Errorf("insert benchmark run: %w", err)
-		}
-
-		if err := store.FinalizeBenchmarkRun(tx, int(runID), "completed", string(stopReason)); err != nil {
-			return 0, fmt.Errorf("finalize benchmark run: %w", err)
-		}
-
-		_, err = store.InsertBenchmarkMetrics(tx, db.BenchmarkMetricsInsert{
-			BenchmarkRunID:   int(runID),
+	_, err = db.PersistBenchmarkResult(store, db.PersistInput{
+		Name:              req.Name,
+		Method:            req.Method,
+		URL:               req.URL,
+		Headers:           req.Headers,
+		Params:            req.Params,
+		Body:              req.Body,
+		UserID:            req.UserID,
+		Concurrency:       req.Concurrency,
+		RateLimit:         req.RateLimit,
+		DurationSeconds:   req.DurationSec,
+		ThrottleTimeMs:    req.ThrottleTimeMs,
+		Status:            "completed",
+		StopReason:        string(stopReason),
+		EndpointVersionID: req.EndpointVersionID,
+		Metrics: db.BenchmarkMetricsInsert{
 			Requests:         result.Requests,
 			Errors:           result.Errors,
 			AvgMs:            result.AvgMs,
@@ -368,8 +359,7 @@ func persistResultCloud(req benchmark.StartBenchmarkRequest, result *benchmark.B
 			Status3xx:        result.Status3xx,
 			Status4xx:        result.Status4xx,
 			Status5xx:        result.Status5xx,
-		})
-		return runID, err
+		},
 	})
 
 	return err

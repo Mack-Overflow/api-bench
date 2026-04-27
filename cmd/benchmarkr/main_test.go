@@ -203,8 +203,8 @@ func TestRunMissingURL(t *testing.T) {
 	if code == 0 {
 		t.Fatal("expected non-zero exit code when --url is missing")
 	}
-	if !strings.Contains(stderr, "--url is required") {
-		t.Fatalf("expected '--url is required' in stderr, got:\n%s", stderr)
+	if !strings.Contains(stderr, "provide --url or --endpoint") {
+		t.Fatalf("expected 'provide --url or --endpoint' in stderr, got:\n%s", stderr)
 	}
 }
 
