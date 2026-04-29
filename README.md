@@ -180,6 +180,7 @@ benchmarkr endpoints show list-users --raw  # show with placeholders intact
 benchmarkr run -e list-users             # run with saved defaults
 benchmarkr run -e list-users -v 3        # pin to cloud version 3 (best-effort)
 benchmarkr run -e list-users --concurrency 50  # CLI overrides
+benchmarkr run --all                     # run every endpoint in the file in succession
 ```
 
 ### Env var substitution

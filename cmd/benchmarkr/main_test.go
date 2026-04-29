@@ -203,8 +203,8 @@ func TestRunMissingURL(t *testing.T) {
 	if code == 0 {
 		t.Fatal("expected non-zero exit code when --url is missing")
 	}
-	if !strings.Contains(stderr, "provide --url or --endpoint") {
-		t.Fatalf("expected 'provide --url or --endpoint' in stderr, got:\n%s", stderr)
+	if !strings.Contains(stderr, "provide --url, --endpoint, or --all") {
+		t.Fatalf("expected 'provide --url, --endpoint, or --all' in stderr, got:\n%s", stderr)
 	}
 }
 
@@ -666,6 +666,86 @@ func TestRunStoreWithLocalJSONConfig(t *testing.T) {
 	}
 	if runFiles != 1 {
 		t.Fatalf("expected 1 run file in %s, got %d", outputDir, runFiles)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// run --all
+// ---------------------------------------------------------------------------
+
+func TestRunAll(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "benchmarkr.yaml")
+	yaml := fmt.Sprintf(`version: 1
+endpoints:
+  - name: alpha
+    method: GET
+    url: %s/alpha
+  - name: beta
+    method: GET
+    url: %s/beta
+`, ts.URL, ts.URL)
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := run("run", "--all", "--file", cfgPath, "--duration", "1", "--json")
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+
+	var results []struct {
+		Name       string `json:"name"`
+		StopReason string `json:"stop_reason"`
+		Result     struct {
+			Requests int `json:"requests"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &results); err != nil {
+		t.Fatalf("output is not a JSON array: %v\nraw:\n%s", err, stdout)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d: %+v", len(results), results)
+	}
+	if results[0].Name != "alpha" || results[1].Name != "beta" {
+		t.Fatalf("expected runs in declaration order [alpha, beta], got [%s, %s]", results[0].Name, results[1].Name)
+	}
+	for _, r := range results {
+		if r.StopReason != "completed" {
+			t.Errorf("run %q stop_reason = %q, want completed", r.Name, r.StopReason)
+		}
+		if r.Result.Requests == 0 {
+			t.Errorf("run %q had 0 requests", r.Name)
+		}
+	}
+}
+
+func TestRunAllConflicts(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"with --url", []string{"run", "--all", "--url", ts.URL, "--duration", "1"}, "--all and --url"},
+		{"with --endpoint", []string{"run", "--all", "-e", "x", "--duration", "1"}, "--all and --endpoint"},
+		{"with --version", []string{"run", "--all", "-v", "2", "--duration", "1"}, "--version is not supported with --all"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, stderr, code := run(tc.args...)
+			if code == 0 {
+				t.Fatalf("expected non-zero exit, stderr: %s", stderr)
+			}
+			if !strings.Contains(stderr, tc.want) {
+				t.Fatalf("expected %q in stderr, got: %s", tc.want, stderr)
+			}
+		})
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -95,6 +96,7 @@ func runCmd(args []string) error {
 	endpointVersion := fs.Int("version", 0, "Specific endpoint version to run (requires --endpoint and cloud auth)")
 	fs.IntVar(endpointVersion, "v", 0, "Specific endpoint version (shorthand)")
 	endpointFile := fs.String("file", "", "Endpoints file (default: discovered from CWD)")
+	runAll := fs.Bool("all", false, "Run every endpoint in the local config file in succession")
 
 	// Benchmark config
 	concurrency := fs.Int("concurrency", 1, "Number of concurrent workers")
@@ -122,67 +124,59 @@ func runCmd(args []string) error {
 
 	setFlags := flagsExplicitlySet(fs)
 
-	// Mutually exclusive: --url and --endpoint
-	if *targetURL != "" && *endpointName != "" {
-		return fmt.Errorf("--url and --endpoint are mutually exclusive")
-	}
-	if *targetURL == "" && *endpointName == "" {
-		fs.Usage()
-		return fmt.Errorf("\nprovide --url or --endpoint")
-	}
-	if *endpointVersion != 0 && *endpointName == "" {
-		return fmt.Errorf("--version requires --endpoint")
-	}
-
-	// Build the request: from local config (-e) or from raw flags (--url).
-	var req benchmark.StartBenchmarkRequest
-	if *endpointName != "" {
-		built, err := buildRequestFromEndpoint(buildOpts{
-			EndpointName:    *endpointName,
-			EndpointVersion: *endpointVersion,
-			EndpointFile:    *endpointFile,
-			Store:           *store,
-			Method:          *method,
-			Headers:         headers,
-			Params:          params,
-			Body:            *body,
-			Concurrency:     *concurrency,
-			Duration:        *duration,
-			RateLimit:       *rateLimit,
-			Throttle:        *throttle,
-			CacheMode:       *cacheMode,
-			Name:            *name,
-			SetFlags:        setFlags,
-		})
-		if err != nil {
-			return err
+	if *runAll {
+		if *targetURL != "" {
+			return fmt.Errorf("--all and --url are mutually exclusive")
 		}
-		req = built
+		if *endpointName != "" {
+			return fmt.Errorf("--all and --endpoint are mutually exclusive")
+		}
+		if *endpointVersion != 0 {
+			return fmt.Errorf("--version is not supported with --all")
+		}
 	} else {
-		built, err := buildRequestFromFlags(buildOpts{
-			URL:         *targetURL,
-			Method:      *method,
-			Headers:     headers,
-			Params:      params,
-			Body:        *body,
-			Concurrency: *concurrency,
-			Duration:    *duration,
-			RateLimit:   *rateLimit,
-			Throttle:    *throttle,
-			CacheMode:   *cacheMode,
-			Name:        *name,
-		})
-		if err != nil {
-			return err
+		if *targetURL != "" && *endpointName != "" {
+			return fmt.Errorf("--url and --endpoint are mutually exclusive")
 		}
-		req = built
+		if *targetURL == "" && *endpointName == "" {
+			fs.Usage()
+			return fmt.Errorf("\nprovide --url, --endpoint, or --all")
+		}
+		if *endpointVersion != 0 && *endpointName == "" {
+			return fmt.Errorf("--version requires --endpoint")
+		}
 	}
 
-	if err := benchmark.ValidateRequest(&req); err != nil {
+	requests, err := buildRunRequests(buildRunOpts{
+		runAll:          *runAll,
+		targetURL:       *targetURL,
+		endpointName:    *endpointName,
+		endpointVersion: *endpointVersion,
+		endpointFile:    *endpointFile,
+		store:           *store,
+		method:          *method,
+		headers:         headers,
+		params:          params,
+		body:            *body,
+		concurrency:     *concurrency,
+		duration:        *duration,
+		rateLimit:       *rateLimit,
+		throttle:        *throttle,
+		cacheMode:       *cacheMode,
+		name:            *name,
+		setFlags:        setFlags,
+	})
+	if err != nil {
 		return err
 	}
 
-	// Pre-validate storage config before starting the benchmark
+	for i := range requests {
+		if err := benchmark.ValidateRequest(&requests[i]); err != nil {
+			return err
+		}
+	}
+
+	// Pre-validate storage config before starting the first benchmark.
 	var storeCfg *config.Config
 	if *store {
 		cfg, _, cfgErr := config.Load()
@@ -192,59 +186,211 @@ func runCmd(args []string) error {
 		storeCfg = cfg
 	}
 
-	if !*jsonOutput {
-		printBanner(req)
-	}
-
-	// Start benchmark directly via the engine
-	run := benchmark.Start(req)
-
-	// Handle Ctrl+C: cancel the benchmark
+	// One signal handler for the whole loop: cancel the active run and
+	// stop dispatching subsequent ones.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	var (
+		sigMu      sync.Mutex
+		currentRun *benchmark.ActiveRun
+		aborted    bool
+	)
 	go func() {
-		<-sigCh
-		fmt.Fprintf(os.Stderr, "\n  Stopping benchmark...\n")
-		run.Cancel()
+		for range sigCh {
+			sigMu.Lock()
+			aborted = true
+			if currentRun != nil {
+				fmt.Fprintf(os.Stderr, "\n  Stopping benchmark...\n")
+				currentRun.Cancel()
+			}
+			sigMu.Unlock()
+		}
 	}()
 
-	// Stream live metrics until done
-	startTime := run.StartedAt
-	if !*jsonOutput {
-		streamLiveMetrics(run)
+	type runOutput struct {
+		Name       string                     `json:"name"`
+		StopReason benchmark.StopReason       `json:"stop_reason"`
+		Duration   string                     `json:"duration"`
+		Stored     bool                       `json:"stored"`
+		Result     *benchmark.BenchmarkResult `json:"result"`
 	}
+	var outputs []runOutput
 
-	result, stopReason := run.Wait()
+	for i, req := range requests {
+		sigMu.Lock()
+		if aborted {
+			sigMu.Unlock()
+			break
+		}
+		sigMu.Unlock()
 
-	// Persist if --store flag is set (config already validated pre-run)
-	if *store {
-		if err := persistWithConfig(storeCfg, req, result, stopReason, run.StartedAt); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to persist results: %v\n", err)
-		} else if !*jsonOutput {
-			fmt.Println("  Results stored.")
+		if !*jsonOutput {
+			if *runAll {
+				fmt.Printf("\n  [%d/%d] %s\n", i+1, len(requests), req.Name)
+			}
+			printBanner(req)
+		}
+
+		run := benchmark.Start(req)
+		sigMu.Lock()
+		currentRun = run
+		sigMu.Unlock()
+
+		startTime := run.StartedAt
+		if !*jsonOutput {
+			streamLiveMetrics(run)
+		}
+
+		result, stopReason := run.Wait()
+
+		sigMu.Lock()
+		currentRun = nil
+		sigMu.Unlock()
+
+		if *store {
+			if err := persistWithConfig(storeCfg, req, result, stopReason, run.StartedAt); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to persist results: %v\n", err)
+			} else if !*jsonOutput {
+				fmt.Println("  Results stored.")
+			}
+		}
+
+		if *jsonOutput {
+			outputs = append(outputs, runOutput{
+				Name:       req.Name,
+				StopReason: stopReason,
+				Duration:   time.Since(startTime).Truncate(time.Millisecond).String(),
+				Stored:     *store,
+				Result:     result,
+			})
+		} else {
+			printResults(result, stopReason, time.Since(startTime))
 		}
 	}
 
 	if *jsonOutput {
-		out := struct {
-			StopReason benchmark.StopReason   `json:"stop_reason"`
-			Duration   string                 `json:"duration"`
-			Stored     bool                   `json:"stored"`
-			Result     *benchmark.BenchmarkResult `json:"result"`
-		}{
-			StopReason: stopReason,
-			Duration:   time.Since(startTime).Truncate(time.Millisecond).String(),
-			Stored:     *store,
-			Result:     result,
-		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		enc.Encode(out)
-	} else {
-		printResults(result, stopReason, time.Since(startTime))
+		if *runAll {
+			return enc.Encode(outputs)
+		}
+		if len(outputs) == 1 {
+			r := outputs[0]
+			return enc.Encode(struct {
+				StopReason benchmark.StopReason       `json:"stop_reason"`
+				Duration   string                     `json:"duration"`
+				Stored     bool                       `json:"stored"`
+				Result     *benchmark.BenchmarkResult `json:"result"`
+			}{r.StopReason, r.Duration, r.Stored, r.Result})
+		}
 	}
 
 	return nil
+}
+
+type buildRunOpts struct {
+	runAll          bool
+	targetURL       string
+	endpointName    string
+	endpointVersion int
+	endpointFile    string
+	store           bool
+	method          string
+	headers         []string
+	params          []string
+	body            string
+	concurrency     int
+	duration        int
+	rateLimit       int
+	throttle        int
+	cacheMode       string
+	name            string
+	setFlags        map[string]bool
+}
+
+func buildRunRequests(o buildRunOpts) ([]benchmark.StartBenchmarkRequest, error) {
+	if o.runAll {
+		resolvedPath, err := resolveEndpointFilePath(o.endpointFile, true)
+		if err != nil {
+			return nil, err
+		}
+		file, err := config.LoadEndpointFile(resolvedPath)
+		if err != nil {
+			return nil, err
+		}
+		endpoints := config.FlattenEndpoints(file)
+		if len(endpoints) == 0 {
+			return nil, fmt.Errorf("no endpoints in %s", resolvedPath)
+		}
+		out := make([]benchmark.StartBenchmarkRequest, 0, len(endpoints))
+		for _, ep := range endpoints {
+			built, err := buildRequestFromEndpoint(buildOpts{
+				EndpointName: ep.Name,
+				EndpointFile: resolvedPath,
+				Store:        o.store,
+				Method:       o.method,
+				Headers:      o.headers,
+				Params:       o.params,
+				Body:         o.body,
+				Concurrency:  o.concurrency,
+				Duration:     o.duration,
+				RateLimit:    o.rateLimit,
+				Throttle:     o.throttle,
+				CacheMode:    o.cacheMode,
+				Name:         "",
+				SetFlags:     o.setFlags,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("build request for endpoint %q: %w", ep.Name, err)
+			}
+			out = append(out, built)
+		}
+		return out, nil
+	}
+
+	if o.endpointName != "" {
+		built, err := buildRequestFromEndpoint(buildOpts{
+			EndpointName:    o.endpointName,
+			EndpointVersion: o.endpointVersion,
+			EndpointFile:    o.endpointFile,
+			Store:           o.store,
+			Method:          o.method,
+			Headers:         o.headers,
+			Params:          o.params,
+			Body:            o.body,
+			Concurrency:     o.concurrency,
+			Duration:        o.duration,
+			RateLimit:       o.rateLimit,
+			Throttle:        o.throttle,
+			CacheMode:       o.cacheMode,
+			Name:            o.name,
+			SetFlags:        o.setFlags,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return []benchmark.StartBenchmarkRequest{built}, nil
+	}
+
+	built, err := buildRequestFromFlags(buildOpts{
+		URL:         o.targetURL,
+		Method:      o.method,
+		Headers:     o.headers,
+		Params:      o.params,
+		Body:        o.body,
+		Concurrency: o.concurrency,
+		Duration:    o.duration,
+		RateLimit:   o.rateLimit,
+		Throttle:    o.throttle,
+		CacheMode:   o.cacheMode,
+		Name:        o.name,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return []benchmark.StartBenchmarkRequest{built}, nil
 }
 
 // --- Live streaming ---
