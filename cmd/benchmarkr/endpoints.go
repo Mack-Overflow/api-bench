@@ -103,10 +103,15 @@ const starterYAML = `# benchmarkr endpoints
 version: 1
 
 # Collections are config-file-only groupings; they are not synced to the cloud.
-collections: []
+# collections:
+#   - name: users-api
+#     endpoints:
+#       - name: list-users
+#         method: GET
+#         url: ${API_BASE}/users
 
 # Top-level endpoints (no collection).
-endpoints: []
+endpoints:
 #  - name: example
 #    method: GET
 #    url: ${API_BASE:-https://httpbin.org}/get
