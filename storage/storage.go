@@ -38,16 +38,17 @@ type BenchmarkRun struct {
 
 // RunSummary is a lightweight view of a benchmark run used by ListRuns.
 type RunSummary struct {
-	ID         string    `json:"id"`
-	URL        string    `json:"url"`
-	Method     string    `json:"method"`
-	Name       string    `json:"name"`
-	StartedAt  time.Time `json:"started_at"`
-	Requests   int       `json:"requests"`
-	Errors     int       `json:"errors"`
-	AvgMs      float64   `json:"avg_ms"`
-	P95Ms      int64     `json:"p95_ms"`
-	StopReason string    `json:"stop_reason"`
+	ID               string    `json:"id"`
+	URL              string    `json:"url"`
+	Method           string    `json:"method"`
+	Name             string    `json:"name"`
+	StartedAt        time.Time `json:"started_at"`
+	Requests         int       `json:"requests"`
+	Errors           int       `json:"errors"`
+	AvgMs            float64   `json:"avg_ms"`
+	P95Ms            int64     `json:"p95_ms"`
+	StopReason       string    `json:"stop_reason"`
+	AvgResponseBytes int64     `json:"avg_response_bytes"`
 }
 
 // RunFilter controls which runs are returned by ListRuns.
@@ -56,20 +57,22 @@ type RunFilter struct {
 	Since    *time.Time // runs started at or after this time
 	Before   *time.Time // runs started before this time
 	Limit    int        // max results (0 = unlimited)
+	Version  int        // filter by endpoint version (0 = unset; cloud/SQL only)
 }
 
 // SummaryFromRun extracts a RunSummary from a full BenchmarkRun.
 func SummaryFromRun(r BenchmarkRun) RunSummary {
 	return RunSummary{
-		ID:         r.ID,
-		URL:        r.URL,
-		Method:     r.Method,
-		Name:       r.Name,
-		StartedAt:  r.StartedAt,
-		Requests:   r.Result.Requests,
-		Errors:     r.Result.Errors,
-		AvgMs:      r.Result.AvgMs,
-		P95Ms:      r.Result.P95Ms,
-		StopReason: r.StopReason,
+		ID:               r.ID,
+		URL:              r.URL,
+		Method:           r.Method,
+		Name:             r.Name,
+		StartedAt:        r.StartedAt,
+		Requests:         r.Result.Requests,
+		Errors:           r.Result.Errors,
+		AvgMs:            r.Result.AvgMs,
+		P95Ms:            r.Result.P95Ms,
+		StopReason:       r.StopReason,
+		AvgResponseBytes: r.Result.AvgResponseBytes,
 	}
 }

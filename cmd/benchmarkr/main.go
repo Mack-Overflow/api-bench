@@ -14,7 +14,6 @@ import (
 
 	"github.com/Mack-Overflow/api-bench/benchmark"
 	"github.com/Mack-Overflow/api-bench/config"
-	"github.com/Mack-Overflow/api-bench/db"
 	"github.com/Mack-Overflow/api-bench/storage"
 	"github.com/google/uuid"
 )
@@ -48,6 +47,8 @@ func main() {
 		err = configCmd(os.Args[2:])
 	case "endpoints":
 		err = endpointsCmd(os.Args[2:])
+	case "history":
+		err = historyCmd(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("benchmarkr %s\n", version)
 	case "help", "--help", "-h":
@@ -74,12 +75,14 @@ Commands:
   run         Run a benchmark against a target URL
   config      Manage storage configuration
   endpoints   Manage local endpoint definitions
+  history     Browse and inspect past benchmark runs
   version     Print version information
   help        Show this help message
 
 Run "benchmarkr run --help" for benchmark options.
 Run "benchmarkr config --help" for configuration options.
 Run "benchmarkr endpoints --help" for endpoint management.
+Run "benchmarkr history --help" for history options.
 `)
 }
 
@@ -429,9 +432,7 @@ func clearLines(n int) {
 // --- Storage persistence (--store) ---
 func persistWithConfig(cfg *config.Config, req benchmark.StartBenchmarkRequest, result *benchmark.BenchmarkResult, stopReason benchmark.StopReason, startedAt time.Time) error {
 	switch cfg.Storage.Mode {
-	case "cloud":
-		return persistResultCloud(req, result, stopReason)
-	case "local":
+	case "local", "cloud":
 		backend, err := storage.NewBackendFromConfig(cfg)
 		if err != nil {
 			return err
@@ -458,57 +459,6 @@ func persistWithConfig(cfg *config.Config, req benchmark.StartBenchmarkRequest, 
 	default:
 		return fmt.Errorf("unknown storage mode: %s", cfg.Storage.Mode)
 	}
-}
-
-func persistResultCloud(req benchmark.StartBenchmarkRequest, result *benchmark.BenchmarkResult, stopReason benchmark.StopReason) error {
-	dbURL := os.Getenv("DB_URL")
-	if dbURL == "" {
-		return fmt.Errorf("DB_URL environment variable is required for cloud storage mode")
-	}
-
-	sqlDB, err := db.OpenDB(dbURL)
-	if err != nil {
-		return fmt.Errorf("connect to database: %w", err)
-	}
-	defer sqlDB.Close()
-
-	store := db.New(sqlDB)
-
-	_, err = db.PersistBenchmarkResult(store, db.PersistInput{
-		Name:              req.Name,
-		Method:            req.Method,
-		URL:               req.URL,
-		Headers:           req.Headers,
-		Params:            req.Params,
-		Body:              req.Body,
-		UserID:            req.UserID,
-		Concurrency:       req.Concurrency,
-		RateLimit:         req.RateLimit,
-		DurationSeconds:   req.DurationSec,
-		ThrottleTimeMs:    req.ThrottleTimeMs,
-		Status:            "completed",
-		StopReason:        string(stopReason),
-		EndpointVersionID: req.EndpointVersionID,
-		Metrics: db.BenchmarkMetricsInsert{
-			Requests:         result.Requests,
-			Errors:           result.Errors,
-			AvgMs:            result.AvgMs,
-			P50Ms:            result.P50Ms,
-			P95Ms:            result.P95Ms,
-			P99Ms:            result.P99Ms,
-			MinMs:            result.MinMs,
-			MaxMs:            result.MaxMs,
-			AvgResponseBytes: result.AvgResponseBytes,
-			MinResponseBytes: result.MinResponseBytes,
-			MaxResponseBytes: result.MaxResponseBytes,
-			Status2xx:        result.Status2xx,
-			Status3xx:        result.Status3xx,
-			Status4xx:        result.Status4xx,
-			Status5xx:        result.Status5xx,
-		},
-	})
-
-	return err
 }
 
 // --- Terminal output ---

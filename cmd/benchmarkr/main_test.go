@@ -613,20 +613,20 @@ func TestRunStoreShortFlagWithoutConfig(t *testing.T) {
 	}
 }
 
-func TestRunStoreWithCloudConfigNoDBURL(t *testing.T) {
+func TestRunStoreWithCloudConfigNoToken(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
 	cfgPath := writeTestConfig(t, "cloud", "")
-	env := map[string]string{"BENCH_CONFIG": cfgPath, "DB_URL": ""}
+	env := map[string]string{"BENCH_CONFIG": cfgPath, "BENCH_CLOUD_TOKEN": ""}
 
-	// Benchmark should run, but persistence fails with DB_URL warning
+	// Benchmark should run, but persistence fails because the token is unset.
 	stdout, stderr, code := runWithEnv(env, "run", "--url", ts.URL, "--duration", "1", "--store")
 	if code != 0 {
 		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stderr, "DB_URL") {
-		t.Fatalf("expected warning about DB_URL, got:\nstderr: %s", stderr)
+	if !strings.Contains(stderr, "BENCH_CLOUD_TOKEN") {
+		t.Fatalf("expected warning about BENCH_CLOUD_TOKEN, got:\nstderr: %s", stderr)
 	}
 	// Results should still be printed
 	if !strings.Contains(stdout, "Results") {
@@ -1075,5 +1075,111 @@ func TestHelpListsConfigCommand(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "config") {
 		t.Fatalf("expected 'config' in help output, got:\n%s", stdout)
+	}
+}
+
+func TestHelpListsHistoryCommand(t *testing.T) {
+	stdout, _, code := run("help")
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	if !strings.Contains(stdout, "history") {
+		t.Fatalf("expected 'history' in help output, got:\n%s", stdout)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// run --name --store: name is persisted to JSON backend
+// ---------------------------------------------------------------------------
+
+func TestRunNamePersistedWithStore(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	outputDir := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	content := fmt.Sprintf("[storage]\nmode = \"local\"\n\n[storage.local]\ndriver = \"json\"\n\n[storage.local.json]\noutput_dir = %q\n", outputDir)
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"BENCH_CONFIG": cfgPath}
+
+	// Run with explicit --name
+	_, _, code := runWithEnv(env, "run", "--url", ts.URL, "--duration", "1", "--store", "--name", "my-bench-name")
+	if code != 0 {
+		t.Fatalf("run with --name exited %d", code)
+	}
+
+	// Find the saved run file
+	matches, _ := filepath.Glob(filepath.Join(outputDir, "*.json"))
+	var runFile string
+	for _, m := range matches {
+		if filepath.Base(m) != "index.json" {
+			runFile = m
+			break
+		}
+	}
+	if runFile == "" {
+		t.Fatal("no run file found in output dir")
+	}
+
+	data, err := os.ReadFile(runFile)
+	if err != nil {
+		t.Fatalf("read run file: %v", err)
+	}
+	var saved struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("parse run file: %v", err)
+	}
+	if saved.Name != "my-bench-name" {
+		t.Errorf("saved name = %q, want %q", saved.Name, "my-bench-name")
+	}
+}
+
+func TestRunNameDefaultsToURL(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	outputDir := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	content := fmt.Sprintf("[storage]\nmode = \"local\"\n\n[storage.local]\ndriver = \"json\"\n\n[storage.local.json]\noutput_dir = %q\n", outputDir)
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"BENCH_CONFIG": cfgPath}
+
+	// Run without --name: should default to URL
+	_, _, code := runWithEnv(env, "run", "--url", ts.URL, "--duration", "1", "--store")
+	if code != 0 {
+		t.Fatalf("run without --name exited %d", code)
+	}
+
+	matches, _ := filepath.Glob(filepath.Join(outputDir, "*.json"))
+	var runFile string
+	for _, m := range matches {
+		if filepath.Base(m) != "index.json" {
+			runFile = m
+			break
+		}
+	}
+	if runFile == "" {
+		t.Fatal("no run file found in output dir")
+	}
+
+	data, err := os.ReadFile(runFile)
+	if err != nil {
+		t.Fatalf("read run file: %v", err)
+	}
+	var saved struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatalf("parse run file: %v", err)
+	}
+	if saved.Name != ts.URL {
+		t.Errorf("saved name = %q, want URL %q", saved.Name, ts.URL)
 	}
 }
