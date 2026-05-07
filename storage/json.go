@@ -87,6 +87,10 @@ func (b *JSONBackend) SaveRun(_ context.Context, run BenchmarkRun) error {
 }
 
 func (b *JSONBackend) ListRuns(_ context.Context, filter RunFilter) ([]RunSummary, error) {
+	if filter.Version > 0 {
+		return nil, fmt.Errorf("--version is not supported for JSON storage; use postgres/mysql or cloud")
+	}
+
 	b.mu.Lock()
 	entries, err := b.readIndex()
 	b.mu.Unlock()

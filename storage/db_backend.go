@@ -276,10 +276,16 @@ func (b *dbBackend) ListRuns(ctx context.Context, filter RunFilter) ([]RunSummar
 		args = append(args, *filter.Before)
 		n++
 	}
+	if filter.Version > 0 {
+		conditions = append(conditions, fmt.Sprintf("ev.version = %s", b.ph(n)))
+		args = append(args, filter.Version)
+		n++
+	}
 
 	query := `SELECT br.id, e.url, e.method, e.name, br.started_at,
 	                 bm.requests_total, bm.errors_total, bm.avg_ms, bm.p95_ms,
-	                 COALESCE(br.stop_reason, '')
+	                 COALESCE(br.stop_reason, ''),
+	                 COALESCE(bm.avg_response_bytes, 0)
 	          FROM benchmark_runs br
 	          JOIN endpoint_versions ev ON br.endpoint_version_id = ev.id
 	          JOIN endpoints e ON ev.endpoint_id = e.id
@@ -307,6 +313,7 @@ func (b *dbBackend) ListRuns(ctx context.Context, filter RunFilter) ([]RunSummar
 		if err := rows.Scan(
 			&dbID, &s.URL, &s.Method, &s.Name, &s.StartedAt,
 			&s.Requests, &s.Errors, &s.AvgMs, &s.P95Ms, &s.StopReason,
+			&s.AvgResponseBytes,
 		); err != nil {
 			return nil, fmt.Errorf("scanning run summary: %w", err)
 		}

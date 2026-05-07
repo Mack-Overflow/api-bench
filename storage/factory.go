@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/Mack-Overflow/api-bench/config"
 )
@@ -13,10 +14,22 @@ func NewBackendFromConfig(cfg *config.Config) (StorageBackend, error) {
 	case "local":
 		return newLocalBackend(cfg)
 	case "cloud":
-		return nil, fmt.Errorf("cloud storage uses direct database access; configure local storage or use DB_URL")
+		return newCloudBackendFromConfig(cfg)
 	default:
 		return nil, fmt.Errorf("unknown storage mode: %q", cfg.Storage.Mode)
 	}
+}
+
+func newCloudBackendFromConfig(cfg *config.Config) (StorageBackend, error) {
+	tokenEnv := cfg.Cloud.TokenEnv
+	if tokenEnv == "" {
+		tokenEnv = "BENCH_CLOUD_TOKEN"
+	}
+	token := os.Getenv(tokenEnv)
+	if token == "" {
+		return nil, fmt.Errorf("cloud api token env var $%s is not set", tokenEnv)
+	}
+	return NewCloudBackend(cfg.Cloud.API_URL, token)
 }
 
 func newLocalBackend(cfg *config.Config) (StorageBackend, error) {

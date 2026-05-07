@@ -73,17 +73,18 @@ If the full stack is already running via `docker compose`, exec into the existin
 docker compose exec go ./benchmarkr run --url https://api.example.com/health
 ```
 
-### Persist results to the database from Docker
+### Persist results from Docker (cloud mode)
 
-When the container is on the `benchmarkr` network, it can reach the Postgres service directly:
+Pass your cloud API token so the container can POST results to the Benchmarkr API:
 
 ```bash
-docker run --rm --network benchmarkr_benchmarkr \
-  -e DB_URL="postgres://benchmarkr:secret@benchmarkr-postgres:5432/benchmarkr?sslmode=disable" \
+docker run --rm \
+  -e BENCH_CLOUD_TOKEN="bmr_your_token" \
+  -v "$HOME/.config/benchmarkr:/root/.config/benchmarkr:ro" \
   benchmarkr-cli ./benchmarkr run --url https://api.example.com/health --store
 ```
 
-Or via docker compose:
+Or via docker compose (config file is already mounted in the compose service):
 
 ```bash
 docker compose exec go ./benchmarkr run --url https://api.example.com/health --store
@@ -112,6 +113,7 @@ benchmarkr run \
 | Command       | Description                                         |
 |---------------|-----------------------------------------------------|
 | `run`         | Run a benchmark against a target URL or saved endpoint |
+| `history`     | Browse and inspect past benchmark runs              |
 | `endpoints`   | Manage local endpoint definitions                   |
 | `config`      | Manage storage configuration                        |
 | `version`     | Print version information                           |
@@ -343,12 +345,12 @@ Use the benchmarkr MCP tools (run_benchmark, compare_endpoints, regression_test)
 Do not install or use external tools like hey, ab, or bombardier.
 ```
 
-The MCP server works without a database by default. To enable persistence, set the `DB_URL` environment variable.
+The MCP server works without a database by default. To enable persistence, set `DB_URL` (direct Postgres connection used by the MCP server) or configure cloud mode in `~/.config/benchmarkr/config.toml` with `BENCH_CLOUD_TOKEN`.
 
 ## Environment Variables
 
 | Variable              | Description                                                  |
 |-----------------------|--------------------------------------------------------------|
-| `DB_URL`              | PostgreSQL connection string (for `--store` cloud mode)      |
-| `BENCH_CLOUD_TOKEN`   | API token for cloud sync — needed when using `--store` with cloud, or `-v` to pin a cloud version |
+| `BENCH_CLOUD_TOKEN`   | `bmr_*` API key for cloud sync — required when `storage.mode = cloud` or using `-v` to pin a cloud version |
 | `BENCH_CONFIG`        | Override the path to the storage config (TOML)               |
+| `DB_URL`              | PostgreSQL connection string used by `benchmarkr-mcp` for direct database persistence (not used by the CLI) |
