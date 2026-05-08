@@ -80,11 +80,7 @@ Note: --version is not supported for JSON storage.
 
 	effectiveLookback := *lookback
 	if effectiveLookback == 0 {
-		if endpointURL != "" {
-			effectiveLookback = 10
-		} else {
-			effectiveLookback = 1
-		}
+		effectiveLookback = 15
 	}
 
 	historyColors = !*noColor &&
@@ -154,27 +150,12 @@ Note: --version is not supported for JSON storage.
 		return nil
 	}
 
-	// No positional URL: detail view of the single newest run
-	if endpointURL == "" {
-		run, err := backend.GetRun(ctx, runs[0].ID)
-		if err != nil {
-			return err
-		}
-		if *jsonOutput {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(run)
-		}
-		printRunDetail(run)
-		return nil
-	}
-
 	if *jsonOutput {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(runs)
 	}
-	printRunList(runs, endpointURL)
+	printRunList(runs, endpointURL, effectiveLookback)
 	return nil
 }
 
@@ -219,8 +200,12 @@ func max(a, b int) int {
 	return b
 }
 
-func printRunList(runs []storage.RunSummary, endpoint string) {
-	fmt.Fprintf(os.Stderr, "  Endpoint: %s  (%d runs)\n\n", endpoint, len(runs))
+func printRunList(runs []storage.RunSummary, endpoint string, limit int) {
+	if endpoint != "" {
+		fmt.Fprintf(os.Stderr, "  Endpoint: %s  (%d runs)\n\n", endpoint, len(runs))
+	} else {
+		fmt.Fprintf(os.Stderr, "  Most recent %d runs\n\n", limit)
+	}
 
 	type rowData struct {
 		started  string
