@@ -310,8 +310,14 @@ func slugify(rawURL string) string {
 
 // matchesFilter checks whether a summary passes the given filter criteria.
 func matchesFilter(s RunSummary, f RunFilter) bool {
-	if f.Endpoint != "" && !strings.Contains(s.URL, f.Endpoint) {
-		return false
+	if f.Endpoint != "" {
+		if strings.HasPrefix(f.Endpoint, "http://") || strings.HasPrefix(f.Endpoint, "https://") {
+			if s.URL != f.Endpoint {
+				return false
+			}
+		} else if !strings.Contains(s.URL, f.Endpoint) {
+			return false
+		}
 	}
 	if f.Since != nil && s.StartedAt.Before(*f.Since) {
 		return false

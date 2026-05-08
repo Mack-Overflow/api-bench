@@ -262,8 +262,13 @@ func (b *dbBackend) ListRuns(ctx context.Context, filter RunFilter) ([]RunSummar
 	n := 1
 
 	if filter.Endpoint != "" {
-		conditions = append(conditions, fmt.Sprintf("e.url LIKE %s", b.ph(n)))
-		args = append(args, "%"+filter.Endpoint+"%")
+		if strings.HasPrefix(filter.Endpoint, "http://") || strings.HasPrefix(filter.Endpoint, "https://") {
+			conditions = append(conditions, fmt.Sprintf("e.url = %s", b.ph(n)))
+			args = append(args, filter.Endpoint)
+		} else {
+			conditions = append(conditions, fmt.Sprintf("e.url LIKE %s", b.ph(n)))
+			args = append(args, "%"+filter.Endpoint+"%")
+		}
 		n++
 	}
 	if filter.Since != nil {
