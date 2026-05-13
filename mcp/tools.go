@@ -3,21 +3,36 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/Mack-Overflow/api-bench/benchmark"
+	"github.com/Mack-Overflow/api-bench/config"
 	"github.com/Mack-Overflow/api-bench/db"
+	"github.com/Mack-Overflow/api-bench/storage"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 const maxDurationSeconds = 300
 
+const (
+	settingsURL = "https://benchmarkr-1.onrender.com/settings"
+	billingURL  = "https://benchmarkr-1.onrender.com/settings#billing"
+)
+
 // Tools holds the dependencies that tool handlers need.
+//
+// Backend is the configured storage.StorageBackend (the single write path for
+// completed runs). Config is the loaded benchmarkr config — when its storage
+// mode is "cloud", run_benchmark calls Laravel's preflight endpoint before
+// starting. Store is kept only for read-side helpers such as list_endpoints.
 type Tools struct {
 	Registry *RunRegistry
-	Store    *db.DB // nil when DB is not configured
+	Backend  storage.StorageBackend // nil when no storage is configured
+	Config   *config.Config         // nil when no config is loaded
+	Store    *db.DB                 // nil when DB is not configured
 }
 
 func (t *Tools) handleRunBenchmark(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -93,6 +108,30 @@ func (t *Tools) handleRunBenchmark(ctx context.Context, request mcp.CallToolRequ
 		return toolError(err.Error()), nil
 	}
 
+	// Preflight against Laravel when storing to the cloud backend. Bad API
+	// key blocks the run; storage cap downgrades store to false but lets
+	// the benchmark proceed.
+	disableStorage := false
+	var preflightNote string
+	if store && t.Config != nil && t.Config.Storage.Mode == "cloud" {
+		pf, err := storage.CloudPreflight(ctx, t.Config, storage.PreflightOpts{})
+		switch {
+		case errors.Is(err, storage.ErrAuth):
+			return toolError(fmt.Sprintf(
+				"your API key is missing or invalid.\n  1. Visit %s to generate a new one.\n  2. Run: benchmarkr config set cloud.token <KEY>",
+				settingsURL,
+			)), nil
+		case err != nil:
+			return toolError(fmt.Sprintf("preflight failed: %v", err)), nil
+		case !pf.Storage.Allowed:
+			disableStorage = true
+			preflightNote = fmt.Sprintf(
+				"Stored-runs limit reached (%d/%d). Benchmark will run but won't be saved. Upgrade at %s",
+				pf.Storage.Stored, pf.Storage.Limit, billingURL,
+			)
+		}
+	}
+
 	runID := fmt.Sprintf("%d", time.Now().UnixNano())
 	req.RunID = runID
 
@@ -103,42 +142,30 @@ func (t *Tools) handleRunBenchmark(ctx context.Context, request mcp.CallToolRequ
 
 	elapsed := time.Since(run.StartedAt)
 
-	// Persist if requested and DB is available
+	// Persist if requested and a backend is configured
 	stored := false
-	if store {
-		if t.Store == nil {
-			// Include a note in the output rather than failing the tool
+	var persistErr error
+	if store && !disableStorage {
+		if t.Backend == nil {
+			persistErr = fmt.Errorf("no storage backend configured")
 		} else {
-			_, persistErr := db.PersistBenchmarkResult(t.Store, db.PersistInput{
-				Name:            req.Name,
-				Method:          req.Method,
-				URL:             req.URL,
-				Headers:         req.Headers,
-				Params:          req.Params,
-				Body:            req.Body,
-				Concurrency:     req.Concurrency,
-				RateLimit:       req.RateLimit,
-				DurationSeconds: req.DurationSec,
-				ThrottleTimeMs:  req.ThrottleTimeMs,
-				Status:          "completed",
-				StopReason:      string(stopReason),
-				Metrics: db.BenchmarkMetricsInsert{
-					Requests:         result.Requests,
-					Errors:           result.Errors,
-					AvgMs:            result.AvgMs,
-					P50Ms:            result.P50Ms,
-					P95Ms:            result.P95Ms,
-					P99Ms:            result.P99Ms,
-					MinMs:            result.MinMs,
-					MaxMs:            result.MaxMs,
-					AvgResponseBytes: result.AvgResponseBytes,
-					MinResponseBytes: result.MinResponseBytes,
-					MaxResponseBytes: result.MaxResponseBytes,
-					Status2xx:        result.Status2xx,
-					Status3xx:        result.Status3xx,
-					Status4xx:        result.Status4xx,
-					Status5xx:        result.Status5xx,
-				},
+			persistErr = t.Backend.SaveRun(ctx, storage.BenchmarkRun{
+				ID:             runID,
+				Name:           req.Name,
+				URL:            req.URL,
+				Method:         req.Method,
+				Headers:        req.Headers,
+				Params:         req.Params,
+				Body:           req.Body,
+				Concurrency:    req.Concurrency,
+				DurationSec:    req.DurationSec,
+				RateLimit:      req.RateLimit,
+				ThrottleTimeMs: req.ThrottleTimeMs,
+				CacheMode:      string(req.CacheMode),
+				StartedAt:      run.StartedAt,
+				EndedAt:        time.Now(),
+				StopReason:     string(stopReason),
+				Result:         *result,
 			})
 			if persistErr == nil {
 				stored = true
@@ -147,14 +174,17 @@ func (t *Tools) handleRunBenchmark(ctx context.Context, request mcp.CallToolRequ
 	}
 
 	summary := FormatResult(req, result, stopReason, elapsed)
-	if store && !stored {
-		if t.Store == nil {
-			summary += "\nNote: store=true was requested but no database is configured."
+	if preflightNote != "" {
+		summary += "\n" + preflightNote
+	}
+	if store && !stored && !disableStorage {
+		if t.Backend == nil {
+			summary += "\nNote: store=true was requested but no storage backend is configured."
 		} else {
-			summary += "\nNote: store=true was requested but persistence failed."
+			summary += fmt.Sprintf("\nNote: store=true was requested but persistence failed: %v", persistErr)
 		}
 	} else if stored {
-		summary += "\nResults stored to database."
+		summary += "\nResults stored."
 	}
 
 	// Return human-readable summary + raw JSON

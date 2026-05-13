@@ -620,17 +620,15 @@ func TestRunStoreWithCloudConfigNoToken(t *testing.T) {
 	cfgPath := writeTestConfig(t, "cloud", "")
 	env := map[string]string{"BENCH_CONFIG": cfgPath, "BENCH_CLOUD_TOKEN": ""}
 
-	// Benchmark should run, but persistence fails because the token is unset.
-	stdout, stderr, code := runWithEnv(env, "run", "--url", ts.URL, "--duration", "1", "--store")
-	if code != 0 {
-		t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	// Cloud preflight now runs before the benchmark; a missing token must
+	// abort the run with a clear remediation message rather than burning
+	// CPU on a benchmark whose results can't be saved.
+	_, stderr, code := runWithEnv(env, "run", "--url", ts.URL, "--duration", "1", "--store")
+	if code == 0 {
+		t.Fatalf("expected non-zero exit when cloud token is missing, stderr:\n%s", stderr)
 	}
-	if !strings.Contains(stderr, "BENCH_CLOUD_TOKEN") {
-		t.Fatalf("expected warning about BENCH_CLOUD_TOKEN, got:\nstderr: %s", stderr)
-	}
-	// Results should still be printed
-	if !strings.Contains(stdout, "Results") {
-		t.Fatalf("expected results output even when persistence fails, got:\n%s", stdout)
+	if !strings.Contains(stderr, "BENCH_CLOUD_TOKEN") && !strings.Contains(stderr, "cloud.token") {
+		t.Fatalf("expected token remediation hint, got:\nstderr: %s", stderr)
 	}
 }
 

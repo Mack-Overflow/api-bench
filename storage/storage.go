@@ -19,6 +19,7 @@ type StorageBackend interface {
 // BenchmarkRun is the complete record of a single benchmark execution.
 type BenchmarkRun struct {
 	ID             string                    `json:"id"`
+	UserID         *int64                    `json:"user_id,omitempty"`
 	Name           string                    `json:"name"`
 	URL            string                    `json:"url"`
 	Method         string                    `json:"method"`

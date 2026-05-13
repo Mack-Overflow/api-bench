@@ -1,22 +1,30 @@
 package main
 
 import (
-	"database/sql"
+	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/Mack-Overflow/api-bench/benchmark"
-	"github.com/Mack-Overflow/api-bench/db"
+	"github.com/Mack-Overflow/api-bench/config"
+	"github.com/Mack-Overflow/api-bench/storage"
 )
 
-// serverRun wraps an ActiveRun with server-specific metadata.
+// serverRun wraps an ActiveRun with server-specific metadata. The full
+// lifecycle lives in memory; persistence happens once at completion through
+// the configured storage.StorageBackend. skipPersist is set when Laravel's
+// preflight reported the user has hit their stored-runs cap — the benchmark
+// still runs, but the result is not saved.
 type serverRun struct {
 	*benchmark.ActiveRun
-	dbID   int64
-	userID int64
-	runID  string
+	req         benchmark.StartBenchmarkRequest
+	userID      int64
+	runID       string
+	skipPersist bool
 }
 
 var (
@@ -25,23 +33,21 @@ var (
 	runsMu         sync.RWMutex
 )
 
-const maxRequestBodyBytes int64 = 256 << 20 // 256 MB
+const maxRequestBodyBytes int64 = 1 << 20 // 1 MB — benchmark configs are small
 
-func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
+func startBenchmarkHandler(backend storage.StorageBackend, preflightCfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		// Extract authenticated user ID from context (set by withAPIKeyAuth)
 		userID, ok := r.Context().Value(userIDKey).(int64)
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		// Enforce one active benchmark run per user
 		runsMu.RLock()
 		if existingRunID, active := activeUserRuns[userID]; active {
 			if sr, exists := runs[existingRunID]; exists && sr.GetStatus() == benchmark.StatusRunning {
@@ -52,7 +58,6 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 		}
 		runsMu.RUnlock()
 
-		// Cap incoming request body size
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 
 		var req benchmark.StartBenchmarkRequest
@@ -61,13 +66,11 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 			return
 		}
 
-		// SSRF prevention: block private/reserved IPs from the server
 		if err := validateBenchmarkURL(req.URL); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		// Apply server-side limits (configurable for future licensing)
 		benchmark.ApplyLimits(&req, benchmark.DefaultLimits)
 
 		if err := benchmark.ValidateRequest(&req); err != nil {
@@ -75,96 +78,23 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 			return
 		}
 
-		// Use the authenticated user ID, not the client-supplied one
-		req.UserID = &userID
-
-		if req.EndpointID != nil && *req.EndpointID == 0 {
-			req.EndpointID = nil
-		}
-		if req.EndpointVersionID != nil && *req.EndpointVersionID == 0 {
-			req.EndpointVersionID = nil
-		}
-
-		runID := generateRunID()
-		req.RunID = runID
-
-		var endpointVersionID *int64
-		var endpointID *int64
-
-		benchmarkRunID, err := db.WithTx(store, func(tx *sql.Tx) (int64, error) {
-			if req.EndpointID == nil {
-				id, err := db.InsertEndpointTx(
-					tx,
-					req.Name,
-					req.Method,
-					req.URL,
-					req.Headers,
-					req.Params,
-					req.Body,
-					req.UserID,
-				)
-				if err != nil {
-					return 0, err
-				}
-				endpointID = &id
-			} else {
-				endpointID = req.EndpointID
-				if req.ChangesMade {
-					if err := db.UpdateEndpointTx(
-						tx,
-						*endpointID,
-						req.Method,
-						req.URL,
-						req.Headers,
-						req.Params,
-						req.Body,
-					); err != nil {
-						return 0, err
-					}
-				}
-			}
-
-			if req.ChangesMade || req.EndpointVersionID == nil {
-				vid, err := db.InsertEndpointVersionTx(
-					tx,
-					*endpointID,
-					1,
-					req.Method,
-					req.Headers,
-					req.Params,
-					req.Body,
-					req.URL,
-				)
-				if err != nil {
-					return 0, err
-				}
-				endpointVersionID = &vid
-			} else {
-				endpointVersionID = req.EndpointVersionID
-			}
-
-			return store.InsertBenchmarkRunTx(tx, db.BenchmarkRunInsert{
-				EndpointVersionID: endpointVersionID,
-				Concurrency:       req.Concurrency,
-				RateLimit:         req.RateLimit,
-				DurationSeconds:   req.DurationSec,
-				ThrottleTimeMs:    req.ThrottleTimeMs,
-				UserID:            req.UserID,
-			})
-		})
-		if err != nil {
-			log.Printf("insert benchmark run failed: %v", err)
-			http.Error(w, "failed to create benchmark run", http.StatusInternalServerError)
+		skipPersist, ok := runPreflight(w, r, preflightCfg, req)
+		if !ok {
 			return
 		}
+
+		req.UserID = &userID
+		runID := generateRunID()
+		req.RunID = runID
 
 		activeRun := benchmark.Start(req)
 
 		sr := &serverRun{
-			ActiveRun: activeRun,
-			dbID:      benchmarkRunID,
-			userID:    userID,
-			runID:     runID,
+			ActiveRun:   activeRun,
+			req:         req,
+			userID:      userID,
+			runID:       runID,
+			skipPersist: skipPersist,
 		}
 
 		runsMu.Lock()
@@ -172,8 +102,7 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 		activeUserRuns[userID] = runID
 		runsMu.Unlock()
 
-		// Persist results to DB when benchmark completes
-		go persistOnComplete(store, sr)
+		go persistOnComplete(backend, sr)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -182,52 +111,84 @@ func startBenchmarkHandler(store *db.DB) http.HandlerFunc {
 	}
 }
 
-func persistOnComplete(store *db.DB, sr *serverRun) {
+// runPreflight calls Laravel's POST /api/runs/preflight. Returns
+// (skipPersist, ok). When ok=false the response has already been written
+// (4xx/5xx for the client). When preflightCfg is nil (LARAVEL_INTERNAL_URL
+// unset), the preflight is skipped entirely.
+func runPreflight(w http.ResponseWriter, r *http.Request, preflightCfg *config.Config, req benchmark.StartBenchmarkRequest) (bool, bool) {
+	if preflightCfg == nil {
+		return false, true
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	pf, err := storage.CloudPreflight(ctx, preflightCfg, storage.PreflightOpts{
+		WorkerSeconds:       req.Concurrency * req.DurationSec,
+		AuthorizationHeader: r.Header.Get("Authorization"),
+	})
+	switch {
+	case errors.Is(err, storage.ErrAuth):
+		http.Error(w, "invalid api key", http.StatusUnauthorized)
+		return false, false
+	case errors.Is(err, storage.ErrWorkerSecondsExceeded):
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":          "quota_exceeded",
+			"worker_seconds": pf.WorkerSeconds,
+		})
+		return false, false
+	case err != nil:
+		log.Printf("preflight failed: %v", err)
+		http.Error(w, "preflight failed", http.StatusBadGateway)
+		return false, false
+	}
+	return !pf.Storage.Allowed, true
+}
+
+// persistOnComplete waits for the benchmark to finish, releases the
+// per-user active slot, and writes the run to the configured storage
+// backend. Persistence is a single SaveRun call — the backend chooses
+// how to record it (SQL upsert, JSON file, or HTTP POST to Laravel).
+// When skipPersist is true (storage cap reached), the save is suppressed.
+func persistOnComplete(backend storage.StorageBackend, sr *serverRun) {
 	result, stopReason := sr.Wait()
 
-	// Release the per-user active run slot so the user can start another
 	runsMu.Lock()
 	if activeUserRuns[sr.userID] == sr.runID {
 		delete(activeUserRuns, sr.userID)
 	}
 	runsMu.Unlock()
 
-	if err := store.MarkBenchmarkRunRunning(int(sr.dbID)); err != nil {
-		log.Printf("failed to mark run running: %v", err)
+	if sr.skipPersist {
+		return
 	}
 
-	_, err := db.WithTx(store, func(tx *sql.Tx) (int64, error) {
-		if err := store.FinalizeBenchmarkRun(
-			tx,
-			int(sr.dbID),
-			"completed",
-			string(stopReason),
-		); err != nil {
-			return 0, err
-		}
+	run := storage.BenchmarkRun{
+		ID:             sr.runID,
+		UserID:         &sr.userID,
+		Name:           sr.req.Name,
+		URL:            sr.req.URL,
+		Method:         sr.req.Method,
+		Headers:        sr.req.Headers,
+		Params:         sr.req.Params,
+		Body:           sr.req.Body,
+		Concurrency:    sr.req.Concurrency,
+		DurationSec:    sr.req.DurationSec,
+		RateLimit:      sr.req.RateLimit,
+		ThrottleTimeMs: sr.req.ThrottleTimeMs,
+		CacheMode:      string(sr.req.CacheMode),
+		StartedAt:      sr.StartedAt,
+		EndedAt:        time.Now(),
+		StopReason:     string(stopReason),
+		Result:         *result,
+	}
 
-		return store.InsertBenchmarkMetrics(tx, db.BenchmarkMetricsInsert{
-			BenchmarkRunID:   int(sr.dbID),
-			Requests:         result.Requests,
-			Errors:           result.Errors,
-			AvgMs:            result.AvgMs,
-			P50Ms:            result.P50Ms,
-			P95Ms:            result.P95Ms,
-			P99Ms:            result.P99Ms,
-			MinMs:            result.MinMs,
-			MaxMs:            result.MaxMs,
-			AvgResponseBytes: result.AvgResponseBytes,
-			MinResponseBytes: result.MinResponseBytes,
-			MaxResponseBytes: result.MaxResponseBytes,
-			Status2xx:        result.Status2xx,
-			Status3xx:        result.Status3xx,
-			Status4xx:        result.Status4xx,
-			Status5xx:        result.Status5xx,
-		})
-	})
-
-	if err != nil {
-		log.Printf("failed to persist benchmark result: %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := backend.SaveRun(ctx, run); err != nil {
+		log.Printf("failed to persist benchmark run %s: %v", sr.runID, err)
 	}
 }
 
@@ -283,5 +244,6 @@ func getBenchmarkStatusHandler(w http.ResponseWriter, r *http.Request) {
 		"Result":      sr.GetResult(),
 		"StartedAt":   sr.StartedAt,
 		"EndedAt":     sr.GetEndedAt(),
+		"persisted":   !sr.skipPersist,
 	})
 }

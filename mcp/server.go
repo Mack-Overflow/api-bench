@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"github.com/Mack-Overflow/api-bench/config"
 	"github.com/Mack-Overflow/api-bench/db"
+	"github.com/Mack-Overflow/api-bench/storage"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -9,8 +11,11 @@ import (
 const Version = "0.1.0"
 
 // NewServer creates a configured MCP server with all benchmarking tools registered.
-// store may be nil if no database is configured — tools that need DB will return errors.
-func NewServer(store *db.DB) *server.MCPServer {
+// backend is the configured storage.StorageBackend (nil if --store is unusable).
+// cfg is the loaded benchmarkr config (nil if no config). Used by the preflight
+// check to know whether to call Laravel before running.
+// store is the SQL DB used by read-side helpers (list_endpoints).
+func NewServer(backend storage.StorageBackend, cfg *config.Config, store *db.DB) *server.MCPServer {
 	s := server.NewMCPServer(
 		"benchmarkr",
 		Version,
@@ -19,6 +24,8 @@ func NewServer(store *db.DB) *server.MCPServer {
 
 	tools := &Tools{
 		Registry: NewRunRegistry(),
+		Backend:  backend,
+		Config:   cfg,
 		Store:    store,
 	}
 

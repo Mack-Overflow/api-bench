@@ -6,8 +6,10 @@ import (
 	"log"
 	"os"
 
+	"github.com/Mack-Overflow/api-bench/config"
 	"github.com/Mack-Overflow/api-bench/db"
 	mcpserver "github.com/Mack-Overflow/api-bench/mcp"
+	"github.com/Mack-Overflow/api-bench/storage"
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/joho/godotenv"
@@ -21,7 +23,19 @@ func main() {
 		_ = godotenv.Load()
 	}
 
-	// DB is optional — tools that need it will return clear errors if unconfigured.
+	var (
+		backend storage.StorageBackend
+		cfg     *config.Config
+	)
+	if loaded, _, err := config.Load(); err == nil && loaded.IsStorageConfigured() {
+		cfg = loaded
+		if b, err := storage.NewBackendFromConfig(cfg); err == nil {
+			backend = b
+		} else {
+			log.Printf("warning: storage backend init failed: %v", err)
+		}
+	}
+
 	var store *db.DB
 	if dsn := os.Getenv("DB_URL"); dsn != "" {
 		sqlDB, err := db.OpenDB(dsn)
@@ -33,7 +47,7 @@ func main() {
 		}
 	}
 
-	s := mcpserver.NewServer(store)
+	s := mcpserver.NewServer(backend, cfg, store)
 
 	stdioServer := server.NewStdioServer(s)
 	if err := stdioServer.Listen(context.Background(), os.Stdin, os.Stdout); err != nil {

@@ -181,12 +181,19 @@ func runCmd(args []string) error {
 
 	// Pre-validate storage config before starting the first benchmark.
 	var storeCfg *config.Config
+	var disableStorage bool
 	if *store {
 		cfg, _, cfgErr := config.Load()
 		if cfgErr != nil || !cfg.IsStorageConfigured() {
 			return fmt.Errorf("No storage configured. Run 'benchmarkr config init' first")
 		}
 		storeCfg = cfg
+
+		skip, err := cloudPreflightForCLI(storeCfg)
+		if err != nil {
+			return err
+		}
+		disableStorage = skip
 	}
 
 	// One signal handler for the whole loop: cancel the active run and
@@ -252,7 +259,7 @@ func runCmd(args []string) error {
 		currentRun = nil
 		sigMu.Unlock()
 
-		if *store {
+		if *store && !disableStorage {
 			if err := persistWithConfig(storeCfg, req, result, stopReason, run.StartedAt); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to persist results: %v\n", err)
 			} else if !*jsonOutput {
@@ -265,7 +272,7 @@ func runCmd(args []string) error {
 				Name:       req.Name,
 				StopReason: stopReason,
 				Duration:   time.Since(startTime).Truncate(time.Millisecond).String(),
-				Stored:     *store,
+				Stored:     *store && !disableStorage,
 				Result:     result,
 			})
 		} else {

@@ -19,11 +19,9 @@ import (
 )
 
 // dbBackend implements StorageBackend for SQL databases (Postgres and MySQL).
-// It uses the existing Laravel-managed schema (endpoints, endpoint_versions,
-// benchmark_runs, benchmark_metrics) with dialect-specific SQL.
 type dbBackend struct {
 	db           *sql.DB
-	ph           func(int) string // placeholder generator, 1-indexed: "$1" or "?"
+	ph           func(int) string
 	useReturning bool             // true for Postgres (RETURNING id), false for MySQL (LastInsertId)
 	jsonCast     string           // "::json" for Postgres, "" for MySQL
 }
@@ -68,6 +66,30 @@ func NewPostgresBackend(cfg config.PostgresDriverConfig) (*dbBackend, error) {
 		return nil, fmt.Errorf("connecting to postgres at %s:%d: %w", cfg.Host, cfg.Port, err)
 	}
 
+	return &dbBackend{
+		db:           db,
+		ph:           func(n int) string { return fmt.Sprintf("$%d", n) },
+		useReturning: true,
+		jsonCast:     "::json",
+	}, nil
+}
+
+// NewPostgresBackendFromDSN opens a Postgres-backed storage backend directly
+// from a DSN. Used by the public HTTP server, which is wired to its database
+// via the DB_URL environment variable rather than a config file.
+func NewPostgresBackendFromDSN(dsn string) (*dbBackend, error) {
+	if strings.TrimSpace(dsn) == "" {
+		return nil, fmt.Errorf("postgres DSN is empty")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("opening postgres connection: %w", err)
+	}
+	configurePool(db)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("connecting to postgres: %w", err)
+	}
 	return &dbBackend{
 		db:           db,
 		ph:           func(n int) string { return fmt.Sprintf("$%d", n) },
@@ -136,6 +158,11 @@ func TestConnection(cfg *config.Config) error {
 
 // --- StorageBackend: SaveRun ---
 
+// SaveRun is idempotent on endpoint identity: it reuses the existing endpoint
+// row for (user_id, name) and either reuses the latest endpoint_version when
+// its config matches the run, or creates a new version with version = max+1.
+// This mirrors the Laravel IngestionService behavior so both write paths
+// produce identical rows.
 func (b *dbBackend) SaveRun(ctx context.Context, run BenchmarkRun) error {
 	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -143,14 +170,14 @@ func (b *dbBackend) SaveRun(ctx context.Context, run BenchmarkRun) error {
 	}
 	defer tx.Rollback()
 
-	endpointID, err := b.insertEndpoint(ctx, tx, run)
+	endpointID, err := b.findOrInsertEndpoint(ctx, tx, run)
 	if err != nil {
-		return fmt.Errorf("insert endpoint: %w", err)
+		return fmt.Errorf("upsert endpoint: %w", err)
 	}
 
-	versionID, err := b.insertEndpointVersion(ctx, tx, endpointID, run)
+	versionID, err := b.resolveEndpointVersion(ctx, tx, endpointID, run)
 	if err != nil {
-		return fmt.Errorf("insert endpoint version: %w", err)
+		return fmt.Errorf("resolve endpoint version: %w", err)
 	}
 
 	runID, err := b.insertBenchmarkRun(ctx, tx, versionID, run)
@@ -165,54 +192,107 @@ func (b *dbBackend) SaveRun(ctx context.Context, run BenchmarkRun) error {
 	return tx.Commit()
 }
 
-func (b *dbBackend) insertEndpoint(ctx context.Context, tx *sql.Tx, run BenchmarkRun) (int64, error) {
+func (b *dbBackend) findOrInsertEndpoint(ctx context.Context, tx *sql.Tx, run BenchmarkRun) (int64, error) {
+	var query string
+	var args []any
+	if run.UserID == nil {
+		query = fmt.Sprintf(
+			`SELECT id FROM endpoints WHERE user_id IS NULL AND name = %s ORDER BY id DESC LIMIT 1`,
+			b.ph(1))
+		args = []any{run.Name}
+	} else {
+		query = fmt.Sprintf(
+			`SELECT id FROM endpoints WHERE user_id = %s AND name = %s ORDER BY id DESC LIMIT 1`,
+			b.ph(1), b.ph(2))
+		args = []any{*run.UserID, run.Name}
+	}
+
+	var id int64
+	err := tx.QueryRowContext(ctx, query, args...).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+
 	jc := b.jsonCast
-	query := fmt.Sprintf(
-		`INSERT INTO endpoints (name, method, url, headers, params, body, created_at, updated_at)
-		 VALUES (%s, %s, %s, %s%s, %s%s, %s%s, %s, %s)`,
-		b.ph(1), b.ph(2), b.ph(3),
-		b.ph(4), jc, b.ph(5), jc, b.ph(6), jc,
-		b.ph(7), b.ph(8))
+	insertQ := fmt.Sprintf(
+		`INSERT INTO endpoints (user_id, name, method, url, headers, params, body, created_at, updated_at)
+		 VALUES (%s, %s, %s, %s, %s%s, %s%s, %s%s, %s, %s)`,
+		b.ph(1), b.ph(2), b.ph(3), b.ph(4),
+		b.ph(5), jc, b.ph(6), jc, b.ph(7), jc,
+		b.ph(8), b.ph(9))
 
 	now := time.Now()
-	args := []any{
-		run.Name, run.Method, run.URL,
+	insertArgs := []any{
+		run.UserID, run.Name, run.Method, run.URL,
 		jsonBytes(run.Headers), jsonBytes(run.Params), jsonBytes(run.Body),
 		now, now,
 	}
-	return b.insertAndGetID(ctx, tx, query, args...)
+	return b.insertAndGetID(ctx, tx, insertQ, insertArgs...)
 }
 
-func (b *dbBackend) insertEndpointVersion(ctx context.Context, tx *sql.Tx, endpointID int64, run BenchmarkRun) (int64, error) {
+func (b *dbBackend) resolveEndpointVersion(ctx context.Context, tx *sql.Tx, endpointID int64, run BenchmarkRun) (int64, error) {
+	latestQ := fmt.Sprintf(
+		`SELECT id, version, method, url, headers, params, body
+		 FROM endpoint_versions WHERE endpoint_id = %s ORDER BY version DESC LIMIT 1`,
+		b.ph(1))
+
+	var (
+		latestID                 int64
+		latestVersion            int
+		latestMethod, latestURL  string
+		latestHeaders            []byte
+		latestParams, latestBody []byte
+		nextVersion              = 1
+	)
+
+	err := tx.QueryRowContext(ctx, latestQ, endpointID).Scan(
+		&latestID, &latestVersion, &latestMethod, &latestURL,
+		&latestHeaders, &latestParams, &latestBody,
+	)
+	if err == nil {
+		if latestMethod == run.Method && latestURL == run.URL &&
+			jsonEqual(latestHeaders, run.Headers) &&
+			jsonEqual(latestParams, run.Params) &&
+			jsonEqual(latestBody, run.Body) {
+			return latestID, nil
+		}
+		nextVersion = latestVersion + 1
+	} else if err != sql.ErrNoRows {
+		return 0, err
+	}
+
 	jc := b.jsonCast
-	query := fmt.Sprintf(
+	insertQ := fmt.Sprintf(
 		`INSERT INTO endpoint_versions (endpoint_id, version, method, url, headers, params, body, created_at, updated_at)
-		 VALUES (%s, 1, %s, %s, %s%s, %s%s, %s%s, %s, %s)`,
-		b.ph(1), b.ph(2), b.ph(3),
-		b.ph(4), jc, b.ph(5), jc, b.ph(6), jc,
-		b.ph(7), b.ph(8))
+		 VALUES (%s, %s, %s, %s, %s%s, %s%s, %s%s, %s, %s)`,
+		b.ph(1), b.ph(2), b.ph(3), b.ph(4),
+		b.ph(5), jc, b.ph(6), jc, b.ph(7), jc,
+		b.ph(8), b.ph(9))
 
 	now := time.Now()
 	args := []any{
-		endpointID, run.Method, run.URL,
+		endpointID, nextVersion, run.Method, run.URL,
 		jsonBytes(run.Headers), jsonBytes(run.Params), jsonBytes(run.Body),
 		now, now,
 	}
-	return b.insertAndGetID(ctx, tx, query, args...)
+	return b.insertAndGetID(ctx, tx, insertQ, args...)
 }
 
 func (b *dbBackend) insertBenchmarkRun(ctx context.Context, tx *sql.Tx, versionID int64, run BenchmarkRun) (int64, error) {
 	query := fmt.Sprintf(
 		`INSERT INTO benchmark_runs
-		 (endpoint_version_id, status, concurrency, rate_limit, duration_seconds,
+		 (user_id, endpoint_version_id, status, concurrency, rate_limit, duration_seconds,
 		  throttle_time_ms, stop_reason, started_at, ended_at, created_at, updated_at)
-		 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
-		b.ph(1), b.ph(2), b.ph(3), b.ph(4), b.ph(5),
-		b.ph(6), b.ph(7), b.ph(8), b.ph(9), b.ph(10), b.ph(11))
+		 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`,
+		b.ph(1), b.ph(2), b.ph(3), b.ph(4), b.ph(5), b.ph(6),
+		b.ph(7), b.ph(8), b.ph(9), b.ph(10), b.ph(11), b.ph(12))
 
 	now := time.Now()
 	args := []any{
-		versionID, "completed", run.Concurrency, run.RateLimit, run.DurationSec,
+		run.UserID, versionID, "completed", run.Concurrency, run.RateLimit, run.DurationSec,
 		run.ThrottleTimeMs, run.StopReason, run.StartedAt, run.EndedAt, now, now,
 	}
 	return b.insertAndGetID(ctx, tx, query, args...)
@@ -436,6 +516,36 @@ func jsonBytes(data json.RawMessage) []byte {
 		return []byte("{}")
 	}
 	return []byte(data)
+}
+
+// jsonEqual compares two JSON byte slices semantically. Empty/nil/"null"/"{}"
+// are all treated as equivalent. Falls back to byte equality when either side
+// is not valid JSON.
+func jsonEqual(a, b []byte) bool {
+	aEmpty := isEmptyJSON(a)
+	bEmpty := isEmptyJSON(b)
+	if aEmpty && bEmpty {
+		return true
+	}
+	if aEmpty != bEmpty {
+		return false
+	}
+
+	var av, bv any
+	if err := json.Unmarshal(a, &av); err != nil {
+		return string(a) == string(b)
+	}
+	if err := json.Unmarshal(b, &bv); err != nil {
+		return string(a) == string(b)
+	}
+	aOut, _ := json.Marshal(av)
+	bOut, _ := json.Marshal(bv)
+	return string(aOut) == string(bOut)
+}
+
+func isEmptyJSON(b []byte) bool {
+	s := string(b)
+	return len(b) == 0 || s == "null" || s == "{}" || s == "[]"
 }
 
 // Ensure *dbBackend implements both StorageBackend and io.Closer.

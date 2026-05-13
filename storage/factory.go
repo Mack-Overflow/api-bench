@@ -20,14 +20,29 @@ func NewBackendFromConfig(cfg *config.Config) (StorageBackend, error) {
 	}
 }
 
-func newCloudBackendFromConfig(cfg *config.Config) (StorageBackend, error) {
+// ResolveCloudToken returns the bearer token to send to the Laravel API. It
+// prefers an inline cfg.Cloud.Token (set via `benchmarkr config set cloud.token`),
+// falling back to the env var named by cfg.Cloud.TokenEnv (default
+// BENCH_CLOUD_TOKEN). Returns an error if neither is set.
+func ResolveCloudToken(cfg *config.Config) (string, error) {
+	if cfg.Cloud.Token != "" {
+		return cfg.Cloud.Token, nil
+	}
 	tokenEnv := cfg.Cloud.TokenEnv
 	if tokenEnv == "" {
 		tokenEnv = "BENCH_CLOUD_TOKEN"
 	}
 	token := os.Getenv(tokenEnv)
 	if token == "" {
-		return nil, fmt.Errorf("cloud api token env var $%s is not set", tokenEnv)
+		return "", fmt.Errorf("no cloud api token: set 'cloud.token' in config or export $%s", tokenEnv)
+	}
+	return token, nil
+}
+
+func newCloudBackendFromConfig(cfg *config.Config) (StorageBackend, error) {
+	token, err := ResolveCloudToken(cfg)
+	if err != nil {
+		return nil, err
 	}
 	return NewCloudBackend(cfg.Cloud.API_URL, token)
 }

@@ -56,8 +56,13 @@ type MySQLDriverConfig struct {
 }
 
 // CloudConfig holds settings for the cloud API backend.
+//
+// Token takes precedence over TokenEnv when both are set. Token is the
+// "paste the key into your config" path and is stored in plaintext at the
+// config file location — prefer TokenEnv on shared machines.
 type CloudConfig struct {
-	API_URL   string `toml:"api_url"`
+	API_URL  string `toml:"api_url"`
+	Token    string `toml:"token,omitempty"`
 	TokenEnv string `toml:"token_env"`
 }
 
@@ -256,6 +261,11 @@ func (c *Config) Get(key string) (string, error) {
 		return c.Storage.Local.MySQL.PasswordEnv, nil
 	case "cloud.api_url":
 		return c.Cloud.API_URL, nil
+	case "cloud.token":
+		if c.Cloud.Token == "" {
+			return "", nil
+		}
+		return "***", nil
 	case "cloud.token_env":
 		return c.Cloud.TokenEnv, nil
 	default:
@@ -312,6 +322,8 @@ func (c *Config) Set(key, value string) error {
 		c.Storage.Local.MySQL.PasswordEnv = value
 	case "cloud.api_url":
 		c.Cloud.API_URL = value
+	case "cloud.token":
+		c.Cloud.Token = value
 	case "cloud.token_env":
 		c.Cloud.TokenEnv = value
 	default:
